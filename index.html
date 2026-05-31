@@ -353,6 +353,35 @@ function startDrawingUpload(files){
   }).catch(function(e){hideOcr();showInfo("처리 오류",(e&&e.message)||"파일 처리 중 오류가 발생했습니다.");});
 }
 
+// ===== 견적 저장/이력 (클라우드 DB) =====
+function collectQuoteItems(){
+  return (state.results||[]).filter(function(r){return r.c.item.confidence==="high";}).map(function(r){
+    var it=r.c.item,price=null,basis="";
+    if(r.matches&&r.matches.length){price=r.matches[0].recommendedPrice.value;basis="이력";}
+    else if(r.est&&r.est.ok){price=Math.round(r.est.unitPrice);basis="신규";}
+    return{raw:it.rawText,category:it.category,type:it.type||"",code:it.sourceCode||"",material:it.material||"",id:it.id,od:it.od,h:it.h,qty:it.qty,unit_price:price,basis:basis};
+  }).filter(function(x){return x.unit_price!=null;});
+}
+function saveQuote(btn){
+  var items=collectQuoteItems();if(!items.length){showInfo("저장 불가","저장할 견적(HIGH 판정 + 가격)이 없습니다.");return;}
+  if(btn){btn.disabled=true;btn.textContent="저장 중…";}
+  fetch("/api/quotes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:items})})
+    .then(function(r){return r.text().then(function(t){var j;try{j=JSON.parse(t);}catch(e){j={error:"서버가 JSON이 아닌 응답(HTTP "+r.status+")"};}return{ok:r.ok,j:j};});})
+    .then(function(o){if(o.ok)showInfo("저장 완료",(o.j.saved||items.length)+"건을 클라우드에 저장했습니다.");else showInfo("저장 실패",(o.j&&o.j.error)||"저장에 실패했습니다.");renderRun();})
+    .catch(function(e){showInfo("저장 실패",(e&&e.message)||"네트워크 오류");renderRun();});
+}
+function loadHistory(){
+  fetch("/api/quotes").then(function(r){return r.text().then(function(t){var j;try{j=JSON.parse(t);}catch(e){j={error:"서버가 JSON이 아닌 응답(HTTP "+r.status+")"};}return{ok:r.ok,j:j};});})
+    .then(function(o){
+      if(!o.ok){showInfo("이력 불러오기 실패",(o.j&&o.j.error)||"불러오지 못했습니다.");return;}
+      var rows=(o.j&&o.j.batches)||[];
+      if(!rows.length){showInfo("저장 이력","아직 저장된 견적이 없습니다.");return;}
+      var body=rows.map(function(b){var d=new Date(b.created_at);return d.toLocaleString("ko-KR")+"  ·  "+b.n+"건  ·  "+won(Number(b.total))+"원";}).join("\n");
+      showInfo("저장 이력 ("+rows.length+")",body);
+    })
+    .catch(function(e){showInfo("이력 불러오기 실패",(e&&e.message)||"네트워크 오류");});
+}
+
 function renderRun(){
   var html='<div class="card"><h2>문의 입력 (자연어·여러 줄)</h2>'
     +'<textarea id="ta" rows="5">'+esc(state.text)+'</textarea>'
@@ -375,6 +404,12 @@ function renderRun(){
       });
       html+='<button class="run" id="openFix" style="margin-top:12px">📝 빠진 정보 입력하고 견적 내기</button>';
       html+='</div>';
+    }
+    if(state.results.length>0){
+      var saveable=collectQuoteItems();
+      html+='<div class="card" style="display:flex;gap:8px;align-items:center">'
+        +'<button class="run" id="saveBtn" style="flex:1"'+(saveable.length?'':' disabled')+'>☁ 이 견적 저장'+(saveable.length?' ('+saveable.length+'건)':' (저장할 견적 없음)')+'</button>'
+        +'<button class="fbtn" id="histBtn">저장 이력</button></div>';
     }
     state.results.forEach(function(r){
       html+='<div class="res"><div class="in"><b>입력:</b> <span class="mut">'+esc(r.raw.rawText)+'</span></div><div class="bd">';
@@ -429,6 +464,8 @@ function renderRun(){
     var f=fl[0];var rd=new FileReader();rd.onload=function(ev){state.text=String(ev.target.result).slice(0,4000);runPipeline();renderRun();if(missingResults().length>0)openFixModal();};rd.readAsText(f);};
   var ofb=document.getElementById("openFix");if(ofb)ofb.onclick=openFixModal;
   var clb=document.getElementById("clearBtn");if(clb)clb.onclick=function(){state.text="";state.results=null;renderRun();};
+  var svb=document.getElementById("saveBtn");if(svb)svb.onclick=function(){saveQuote(this);};
+  var hsb=document.getElementById("histBtn");if(hsb)hsb.onclick=loadHistory;
 }
 
 function renderCfg(){
