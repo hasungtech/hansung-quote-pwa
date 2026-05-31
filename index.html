@@ -137,6 +137,15 @@ function matchHistory(item){
     recommendedPrice:row.avgWonPrice>0?{value:row.avgWonPrice,basis:"won"}:row.avgQuotePrice>0?{value:row.avgQuotePrice,basis:"quote"}:{value:null,basis:"none"}};});
 }
 var RL={DIMS_MISSING:"치수 없음",UNKNOWN_CODE:"미지 코드",AMBIGUOUS_CODE:"코드 모호",CATEGORY_UNKNOWN:"제품군 미상",MATERIAL_MISSING:"재질 미상",QTY_MISSING:"수량 없음"};
+// 누락 정보 입력 안내 문구(무엇을·예시로 어떻게 입력할지)
+var GUIDE={
+  DIMS_MISSING:"치수(내경×외경×높이)를 입력해 주세요. 예) 50x65x9",
+  UNKNOWN_CODE:"규격표에 없는 코드입니다. 치수를 직접 입력해 주세요. 예) 50x65x9",
+  AMBIGUOUS_CODE:"코드 후보가 여러 개입니다. 치수를 함께 입력해 구분해 주세요.",
+  CATEGORY_UNKNOWN:"제품 종류를 알 수 없습니다. 타입(TC/SC…) 또는 코드(P50/AS568-150)를 입력해 주세요.",
+  MATERIAL_MISSING:"재질을 입력해 주세요. 예) NBR, FKM, EPDM, SILICON",
+  QTY_MISSING:"수량을 입력해 주세요. 예) 30개"
+};
 function won(n){return n==null?"—":Math.round(n).toLocaleString("ko-KR");}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
 
@@ -165,7 +174,20 @@ function renderRun(){
     +'<label class="fbtn">파일<input type="file" id="file" accept=".txt,.csv" style="display:none"></label></div>'
     +'<div class="hint">한 줄에 한 품목. 인식: 타입(TC/SC…)·치수(50x65x9, 일본식 5,7)·코드(P50/AS568-150/AN374)·재질·수량. 실제 도면 OCR은 Firebase+Gemini.</div></div>';
   if(state.results){
-    if(state.results.length===0)html+='<div class="card mut">인식된 품목이 없습니다.</div>';
+    if(state.results.length===0)html+='<div class="card mut">'+(state.text.trim()?'인식된 품목이 없습니다. 타입·치수·코드·재질·수량을 확인해 주세요.':'문의 내용을 입력해 주세요.')+'</div>';
+    // 입력이 필요한(정보 누락) 품목 요약 안내
+    var need=state.results.filter(function(r){return r.c.reasons.length>0;});
+    if(need.length>0){
+      html+='<div class="card" style="border-color:var(--accent);background:#fdf3f3">'
+        +'<h2 style="color:var(--accent)">⚠ 입력이 필요한 정보가 있습니다 ('+need.length+'건)</h2>'
+        +'<div class="hint" style="margin-top:0;color:var(--ink)">아래 품목에 빠진 정보를 채워 다시 실행해 주세요.</div>';
+      need.forEach(function(r){
+        var labels=r.c.reasons.map(function(rs){return RL[rs]||rs;}).join(", ");
+        html+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)"><b>'+esc(r.raw.rawText)+'</b><br>'
+          +'<span class="lo" style="font-size:12px">필요: '+esc(labels)+'</span></div>';
+      });
+      html+='</div>';
+    }
     state.results.forEach(function(r){
       html+='<div class="res"><div class="in"><b>입력:</b> <span class="mut">'+esc(r.raw.rawText)+'</span></div><div class="bd">';
       html+='<div class="row"><b class="hi">인식</b> · '+esc(r.raw.category)+' '+esc(r.raw.type)+' '+esc(r.raw.sourceCode)
@@ -182,9 +204,11 @@ function renderRun(){
       r.c.reasons.forEach(function(rs){html+='<span class="badge">'+(RL[rs]||rs)+'</span>';});
       html+='</div>';
       if(r.c.item.confidence==="low"){
-        html+='<div style="padding:8px 10px;background:#fdf3f3;border-radius:3px;color:var(--accent);font-size:12.5px">→ 확인 대기함'
-          +(r.c.unknownCode?' · 미지코드 '+esc(r.c.unknownCode)+' (치수 입력 시 사내표 등록)':'')
-          +(r.c.candidates?' · 후보 '+r.c.candidates.length+'개 중 선택':'')+'</div>';
+        html+='<div style="padding:8px 10px;background:#fdf3f3;border-radius:3px;color:var(--accent);font-size:12.5px">→ 확인 대기함 — 아래 정보를 입력해 주세요'
+          +'<ul style="margin:6px 0 0;padding-left:18px;line-height:1.6">';
+        r.c.reasons.forEach(function(rs){html+='<li>'+esc(GUIDE[rs]||RL[rs]||rs)+'</li>';});
+        if(r.c.candidates)html+='<li>후보 '+r.c.candidates.length+'개 중 하나를 선택해 주세요.</li>';
+        html+='</ul></div>';
       }else if(r.matches.length>0){
         html+='<b>수주이력 매칭</b><table><thead><tr><th>코드</th><th>수주율</th><th>거래처</th><th>추천가</th><th>근거</th></tr></thead><tbody>';
         r.matches.forEach(function(m){
