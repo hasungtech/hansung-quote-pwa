@@ -236,36 +236,73 @@ function downscaleImage(file,maxPx,cb){
   img.onerror=function(){URL.revokeObjectURL(url);fileToBase64(file,function(b){cb(b,file.type||"image/png");});};
   img.src=url;
 }
-function showOcrLoading(on){
+function delay(ms){return new Promise(function(r){setTimeout(r,ms);});}
+function showOcrProgress(done,total,fail){
   var host=document.getElementById("modalHost");if(!host)return;
-  host.innerHTML=on?'<div class="modal-bd"><div class="modal" style="text-align:center"><h2>도면 인식 중…</h2><div class="hint" style="margin-top:4px">Claude 비전이 도면에서 품목을 읽고 있습니다. 잠시만 기다려 주세요.</div></div></div>':"";
+  host.innerHTML='<div class="modal-bd"><div class="modal" style="text-align:center">'
+    +'<h2>도면 인식 중… ('+done+' / '+total+')</h2>'
+    +'<div class="hint" style="margin-top:4px">Claude 비전이 도면을 읽고 있습니다. 창을 닫지 말고 기다려 주세요.'
+    +(fail?' · 실패 '+fail+'장':'')+'</div></div></div>';
 }
-function extractFromDrawing(file){
-  var isImg=/^image\//.test(file.type);
-  if(!isImg&&file.size>4*1024*1024){alert("PDF가 너무 큽니다(4MB 이하). 페이지를 이미지로 캡처해 올려 주세요.");return;}
-  showOcrLoading(true);
-  var send=function(b64,mt,kind){
-    fetch("/api/extract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({files:[{type:kind,media_type:mt,data:b64}]})})
-      .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j};});})
-      .then(function(o){
-        showOcrLoading(false);
-        if(!o.ok){alert((o.j&&o.j.error)||"도면 인식에 실패했습니다.");return;}
-        var t=((o.j&&o.j.text)||"").trim();
-        if(!t){alert("도면에서 품목을 인식하지 못했습니다. 더 선명한 이미지를 올리거나 직접 입력해 주세요.");return;}
-        state.text=t;runPipeline();renderRun();if(missingResults().length>0)openFixModal();
-      })
-      .catch(function(err){showOcrLoading(false);alert("도면 인식 요청 중 오류가 발생했습니다. 네트워크를 확인해 주세요.\n"+((err&&err.message)||""));});
-  };
-  if(isImg)downscaleImage(file,1600,function(b,mt){send(b,mt,"image");});
-  else fileToBase64(file,function(b){send(b,"application/pdf","pdf");});
+function hideOcr(){var host=document.getElementById("modalHost");if(host)host.innerHTML="";}
+function prepareFile(file,cb){ // cb(payload | null)
+  if(/^image\//.test(file.type)){downscaleImage(file,1600,function(b,mt){cb({type:"image",media_type:mt,data:b});});}
+  else if(file.type==="application/pdf"){if(file.size>4*1024*1024){cb(null);return;}fileToBase64(file,function(b){cb({type:"pdf",media_type:"application/pdf",data:b});});}
+  else cb(null);
+}
+function postExtract(payload,attempt){
+  return fetch("/api/extract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({files:[payload]})})
+    .then(function(r){return r.json().then(function(j){return{ok:r.ok,status:r.status,j:j};});})
+    .then(function(o){
+      if(o.ok)return{text:((o.j&&o.j.text)||"").trim()};
+      if((o.status===429||o.status>=500)&&attempt<2)return delay(1200*(attempt+1)).then(function(){return postExtract(payload,attempt+1);});
+      return{error:(o.j&&o.j.error)||("HTTP "+o.status)};
+    })
+    .catch(function(err){
+      if(attempt<2)return delay(1200*(attempt+1)).then(function(){return postExtract(payload,attempt+1);});
+      return{error:(err&&err.message)||"network"};
+    });
+}
+function extractFromDrawings(files){ // 동시 4개씩 한 장 단위로 처리
+  var total=files.length,done=0,fail=0,lines=[],idx=0,active=0,CONC=4;
+  showOcrProgress(0,total,0);
+  return new Promise(function(resolve){
+    function launch(){
+      while(active<CONC&&idx<total){
+        (function(file){
+          active++;
+          prepareFile(file,function(payload){
+            var p=payload?postExtract(payload,0):Promise.resolve({error:"prepare"});
+            p.then(function(res){
+              if(res.error)fail++;else if(res.text)lines.push(res.text);
+              done++;active--;showOcrProgress(done,total,fail);
+              if(done>=total)resolve({text:lines.join("\n"),fail:fail,total:total});
+              else launch();
+            });
+          });
+        })(files[idx++]);
+      }
+    }
+    launch();
+  });
+}
+function startDrawingUpload(files){
+  if(!files.length)return;
+  extractFromDrawings(files).then(function(r){
+    hideOcr();
+    if(!r.text){alert("도면 "+r.total+"장에서 인식된 품목이 없습니다."+(r.fail?(" ("+r.fail+"장 실패)"):"")+"\n더 선명한 이미지를 올리거나 직접 입력해 주세요.");return;}
+    state.text=r.text;runPipeline();renderRun();
+    if(r.fail)alert(r.total+"장 중 "+r.fail+"장은 인식에 실패해 제외했습니다. 나머지로 견적을 구성했습니다.");
+    if(missingResults().length>0)openFixModal();
+  });
 }
 
 function renderRun(){
   var html='<div class="card"><h2>문의 입력 (자연어·여러 줄)</h2>'
     +'<textarea id="ta" rows="5">'+esc(state.text)+'</textarea>'
     +'<div class="flx"><button class="run" id="runBtn" style="flex:1">인식 & 견적 실행</button>'
-    +'<label class="fbtn">도면·파일<input type="file" id="file" accept="image/*,application/pdf,.txt,.csv" style="display:none"></label></div>'
-    +'<div class="hint">한 줄에 한 품목. 인식: 타입(TC/SC…)·치수(50x65x9, 일본식 5,7)·코드(P50/AS568-150/AN374)·재질·수량. <b>도면(사진·PDF)을 올리면 Claude 비전이 자동 인식</b>합니다.</div></div>';
+    +'<label class="fbtn">도면·파일<input type="file" id="file" accept="image/*,application/pdf,.txt,.csv" multiple style="display:none"></label></div>'
+    +'<div class="hint">한 줄에 한 품목. 인식: 타입(TC/SC…)·치수(50x65x9, 일본식 5,7)·코드(P50/AS568-150/AN374)·재질·수량. <b>도면(사진·PDF)을 여러 장 한 번에 올리면 Claude 비전이 자동 인식</b>합니다.</div></div>';
   if(state.results){
     if(state.results.length===0)html+='<div class="card mut">'+(state.text.trim()?'인식된 품목이 없습니다. 타입·치수·코드·재질·수량을 확인해 주세요.':'문의 내용을 입력해 주세요.')+'</div>';
     // 입력이 필요한(정보 누락) 품목 요약 안내
@@ -328,9 +365,11 @@ function renderRun(){
   pane.innerHTML=html;
   document.getElementById("runBtn").onclick=function(){state.text=document.getElementById("ta").value;runPipeline();renderRun();if(missingResults().length>0)openFixModal();};
   document.getElementById("ta").oninput=function(e){state.text=e.target.value;};
-  document.getElementById("file").onchange=function(e){var f=e.target.files[0];if(!f)return;
-    if(/^image\//.test(f.type)||f.type==="application/pdf"){extractFromDrawing(f);e.target.value="";return;}
-    var rd=new FileReader();rd.onload=function(ev){state.text=String(ev.target.result).slice(0,4000);runPipeline();renderRun();if(missingResults().length>0)openFixModal();};rd.readAsText(f);};
+  document.getElementById("file").onchange=function(e){
+    var fl=Array.prototype.slice.call(e.target.files||[]);if(!fl.length)return;
+    var draw=fl.filter(function(f){return /^image\//.test(f.type)||f.type==="application/pdf";});
+    if(draw.length){startDrawingUpload(draw);e.target.value="";return;}
+    var f=fl[0];var rd=new FileReader();rd.onload=function(ev){state.text=String(ev.target.result).slice(0,4000);runPipeline();renderRun();if(missingResults().length>0)openFixModal();};rd.readAsText(f);};
   var ofb=document.getElementById("openFix");if(ofb)ofb.onclick=openFixModal;
 }
 
