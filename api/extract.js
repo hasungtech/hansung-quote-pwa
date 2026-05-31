@@ -63,7 +63,7 @@ module.exports = async function handler(req, res) {
     const client = new Anthropic({ apiKey: apiKey });
     const msg = await client.messages.create({
       model: MODEL,
-      max_tokens: 1024,
+      max_tokens: 2048,
       // 안정적인 시스템 프롬프트는 캐싱(짧으면 자동으로 캐시 미적용)
       system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: content }],
