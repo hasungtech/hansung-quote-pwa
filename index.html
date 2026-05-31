@@ -79,10 +79,13 @@ function parseLine(line){
   var sourceCode="",category="기타",type="",id=null,od=null,hh=null;
   var tf=""; for(var i=0;i<TYPE_PREFIXES.length;i++){var p=TYPE_PREFIXES[i];if(new RegExp("\\b"+p+"\\b|\\b"+p+"(?=[\\dJN])").test(u)){tf=p;break;}}
   var dm=u.match(/(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)/);
+  // 오링 2-숫자 표기(내경 x 굵기/단면). 3-숫자 치수가 없을 때만.
+  var dm2=dm?null:u.match(/(\d+\.?\d*)\s*[xX]\s*(\d+\.?\d*)/);
   if(tf){category="OIL SEAL";type=tf;if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);}}
   else if(codeM){sourceCode=codeM[1];category=/^AS568|^[PGS]\d|^AN/.test(sourceCode)?"O-RING":"기타";}
   else if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);category="OIL SEAL";}
-  if(!tf&&!codeM&&!dm)return null;
+  else if(dm2){var cs=parseFloat(dm2[2]);id=parseFloat(dm2[1]);od=id+2*cs;category="O-RING";}
+  if(!tf&&!codeM&&!dm&&!dm2)return null;
   return{category:category,type:type,material:material,id:id,od:od,h:hh,qty:qty,sourceCode:sourceCode,
     sizeSource:(id!=null&&od!=null)?"inline":sourceCode?"codeTable":"manual",
     confidence:"low",needsReview:true,rawText:raw};
@@ -315,7 +318,7 @@ function renderRun(){
     +'<textarea id="ta" rows="5">'+esc(state.text)+'</textarea>'
     +'<div class="flx"><button class="run" id="runBtn" style="flex:1">인식 & 견적 실행</button>'
     +'<label class="fbtn">도면·파일<input type="file" id="file" accept="image/*,application/pdf,.txt,.csv" multiple style="display:none"></label></div>'
-    +'<div class="hint">한 줄에 한 품목. 인식: 타입(TC/SC…)·치수(50x65x9, 일본식 5,7)·코드(P50/AS568-150/AN374)·재질·수량. <b>도면(사진·PDF)을 여러 장 한 번에 올리면 Claude 비전이 자동 인식</b>합니다.</div></div>';
+    +'<div class="hint">한 줄에 한 품목. 인식: 타입(TC/SC…)·치수(오일씰 50x65x9·오링 6x3.5)·코드(P50/AS568-150/AN374)·재질·수량. <b>도면(사진·PDF)을 여러 장 한 번에 올리면 Claude 비전이 자동 인식</b>합니다.</div></div>';
   if(state.results){
     if(state.results.length===0)html+='<div class="card mut">'+(state.text.trim()?'인식된 품목이 없습니다. 타입·치수·코드·재질·수량을 확인해 주세요.':'문의 내용을 입력해 주세요.')+'</div>';
     // 입력이 필요한(정보 누락) 품목 요약 안내
