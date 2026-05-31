@@ -2,8 +2,9 @@
   "name": "hansung-quote-pwa",
   "private": true,
   "version": "1.0.0",
-  "description": "한성테크 견적 파이프라인 PWA (정적) + 도면 인식 서버리스 함수",
+  "description": "한성테크 견적 파이프라인 PWA (정적) + 도면 인식·견적 저장 서버리스 함수",
   "dependencies": {
-    "@anthropic-ai/sdk": ">=0.40.0 <1.0.0"
+    "@anthropic-ai/sdk": ">=0.40.0 <1.0.0",
+    "@vercel/postgres": ">=0.9.0 <1.0.0"
   }
 }
