@@ -75,14 +75,14 @@ function parseLine(line){
   var u=raw.toUpperCase().replace(/[×*]/g,"x").replace(/,(\d)/g,".$1");
   var material=""; for(var k in MAT){if(u.indexOf(k)>=0){material=MAT[k];break;}}
   var qty=0; var qm=raw.match(/(\d+)\s*(개|EA|ea|pcs|PCS|장)/); if(qm)qty=parseInt(qm[1]);
-  var codeM=u.match(/\b(AS568-\d+|[PGS]\d+[A-Z]?|AN\d+|K\d+)\b/);
+  var codeM=u.match(/\b(AS568-\d+|[PGS]-?\d+(?:\.\d+)?[A-Z]?|AN-?\d+|K-?\d+)\b/);
   var sourceCode="",category="기타",type="",id=null,od=null,hh=null;
   var tf=""; for(var i=0;i<TYPE_PREFIXES.length;i++){var p=TYPE_PREFIXES[i];if(new RegExp("\\b"+p+"\\b|\\b"+p+"(?=[\\dJN])").test(u)){tf=p;break;}}
   var dm=u.match(/(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)/);
   // 오링 2-숫자 표기(내경 x 굵기/단면). 3-숫자 치수가 없을 때만.
   var dm2=dm?null:u.match(/(\d+\.?\d*)\s*[xX]\s*(\d+\.?\d*)/);
   if(tf){category="OIL SEAL";type=tf;if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);}}
-  else if(codeM){sourceCode=codeM[1];category=/^AS568|^[PGS]\d|^AN/.test(sourceCode)?"O-RING":"기타";}
+  else if(codeM){var sc=codeM[1];sc=/^AS568/.test(sc)?sc:sc.replace(/-/g,"");sourceCode=sc;category=/^AS568|^[PGS]\d|^AN/.test(sc)?"O-RING":"기타";}
   else if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);category="OIL SEAL";}
   else if(dm2){var cs=parseFloat(dm2[2]);id=parseFloat(dm2[1]);od=id+2*cs;category="O-RING";}
   if(!tf&&!codeM&&!dm&&!dm2)return null;
