@@ -227,16 +227,16 @@ function openFixModal(){
 
 // ===== 도면(이미지/PDF) 자동 인식 =====
 function fileToBase64(file,cb){var rd=new FileReader();rd.onload=function(ev){var s=String(ev.target.result),i=s.indexOf(",");cb(i>=0?s.slice(i+1):s);};rd.readAsDataURL(file);}
-function downscaleImage(file,maxPx,cb){
+function downscaleImage(file,maxPx,quality,cb){
   var img=new Image(),url=URL.createObjectURL(file);
   img.onload=function(){
     var w=img.naturalWidth,h=img.naturalHeight,scale=Math.min(1,maxPx/Math.max(w,h));
     var cw=Math.max(1,Math.round(w*scale)),ch=Math.max(1,Math.round(h*scale));
     var c=document.createElement("canvas");c.width=cw;c.height=ch;
     c.getContext("2d").drawImage(img,0,0,cw,ch);URL.revokeObjectURL(url);
-    var d=c.toDataURL("image/jpeg",0.85),i=d.indexOf(",");cb(d.slice(i+1),"image/jpeg");
+    var d=c.toDataURL("image/jpeg",quality||0.8),i=d.indexOf(",");cb(d.slice(i+1));
   };
-  img.onerror=function(){URL.revokeObjectURL(url);fileToBase64(file,function(b){cb(b,file.type||"image/png");});};
+  img.onerror=function(){URL.revokeObjectURL(url);cb(null);}; // 변환 실패(형식 미지원 등)
   img.src=url;
 }
 function delay(ms){return new Promise(function(r){setTimeout(r,ms);});}
@@ -256,10 +256,47 @@ function showInfo(title,body){
   document.getElementById("infoClose").onclick=function(){host.innerHTML="";};
   document.getElementById("infoBd").onclick=function(e){if(e.target.id==="infoBd")host.innerHTML="";};
 }
-function prepareFile(file,cb){ // cb(payload | null)
-  if(/^image\//.test(file.type)){downscaleImage(file,1600,function(b,mt){cb({type:"image",media_type:mt,data:b});});}
-  else if(file.type==="application/pdf"){if(file.size>4*1024*1024){cb(null);return;}fileToBase64(file,function(b){cb({type:"pdf",media_type:"application/pdf",data:b});});}
-  else cb(null);
+// PDF는 pdf.js로 페이지별 이미지로 변환(다중 페이지·대용량 대응, 서버 본문 4.5MB 제한 회피)
+function loadPdfJs(){
+  if(window.pdfjsLib)return Promise.resolve(window.pdfjsLib);
+  return new Promise(function(res,rej){
+    var s=document.createElement("script");
+    s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    s.onload=function(){if(window.pdfjsLib){try{window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";}catch(e){}res(window.pdfjsLib);}else rej(new Error("pdf.js 로드 실패"));};
+    s.onerror=function(){rej(new Error("pdf.js 로드 실패(네트워크 확인)"));};
+    document.head.appendChild(s);
+  });
+}
+// 선택 파일들을 처리 단위(task)로 전개: 이미지 1장 = 1 task, PDF = 페이지 수만큼 task
+function buildTasks(files){
+  var tasks=[],chain=Promise.resolve();
+  files.forEach(function(f){
+    if(/^image\//.test(f.type)){tasks.push({kind:"image",file:f});}
+    else if(f.type==="application/pdf"){
+      chain=chain.then(function(){
+        return loadPdfJs().then(function(pdfjs){
+          return f.arrayBuffer().then(function(buf){
+            return pdfjs.getDocument({data:new Uint8Array(buf)}).promise.then(function(doc){
+              for(var p=1;p<=doc.numPages;p++)tasks.push({kind:"pdfpage",doc:doc,page:p});
+            });
+          });
+        }).catch(function(e){tasks.push({kind:"error",msg:(e&&e.message)||"PDF 처리 실패"});});
+      });
+    }else{tasks.push({kind:"error",msg:"지원하지 않는 형식"});}
+  });
+  return chain.then(function(){return tasks;});
+}
+function renderTask(task){ // Promise<{payload}|{error}>
+  if(task.kind==="error")return Promise.resolve({error:task.msg});
+  if(task.kind==="image")return new Promise(function(res){downscaleImage(task.file,1400,0.8,function(b){res(b?{payload:{type:"image",media_type:"image/jpeg",data:b}}:{error:"이미지 변환 실패(형식 미지원일 수 있음, JPG/PNG 권장)"});});});
+  if(task.kind==="pdfpage")return task.doc.getPage(task.page).then(function(page){
+    var vp=page.getViewport({scale:1}),scale=Math.min(2.5,1500/Math.max(vp.width,vp.height)),v=page.getViewport({scale:scale});
+    var c=document.createElement("canvas");c.width=Math.round(v.width);c.height=Math.round(v.height);
+    return page.render({canvasContext:c.getContext("2d"),viewport:v}).promise.then(function(){
+      var d=c.toDataURL("image/jpeg",0.8),i=d.indexOf(",");return{payload:{type:"image",media_type:"image/jpeg",data:d.slice(i+1)}};
+    });
+  }).catch(function(){return{error:"PDF 페이지 변환 실패"};});
+  return Promise.resolve({error:"알 수 없는 작업"});
 }
 function postExtract(payload,attempt){
   return fetch("/api/extract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({files:[payload]})})
@@ -274,50 +311,54 @@ function postExtract(payload,attempt){
       return{error:(err&&err.message)||"네트워크 오류"};
     });
 }
-function extractFromDrawings(files){ // 동시 4개씩 한 장 단위로 처리
-  var total=files.length,done=0,fail=0,lines=[],idx=0,active=0,CONC=4,firstError="";
+function extractFromDrawings(tasks){ // 동시 4개씩, 각 task를 이미지로 변환→인식
+  var total=tasks.length,done=0,fail=0,lines=[],idx=0,active=0,CONC=4,firstError="";
   showOcrProgress(0,total,0);
   return new Promise(function(resolve){
+    function finishOne(res){
+      if(res.error){fail++;if(!firstError)firstError=res.error;}else if(res.text){lines.push(res.text);}
+      done++;active--;showOcrProgress(done,total,fail);
+      if(done>=total)resolve({text:lines.join("\n"),fail:fail,total:total,error:firstError});
+      else launch();
+    }
     function launch(){
       while(active<CONC&&idx<total){
-        (function(file){
+        (function(task){
           active++;
-          prepareFile(file,function(payload){
-            var p=payload?postExtract(payload,0):Promise.resolve({error:"파일을 읽을 수 없거나 형식·용량(4MB 초과)이 맞지 않습니다."});
-            p.then(function(res){
-              if(res.error){fail++;if(!firstError)firstError=res.error;}else if(res.text){lines.push(res.text);}
-              done++;active--;showOcrProgress(done,total,fail);
-              if(done>=total)resolve({text:lines.join("\n"),fail:fail,total:total,error:firstError});
-              else launch();
-            });
+          renderTask(task).then(function(rt){
+            if(rt.error){finishOne({error:rt.error});return;}
+            postExtract(rt.payload,0).then(finishOne);
           });
-        })(files[idx++]);
+        })(tasks[idx++]);
       }
     }
+    if(total===0){resolve({text:"",fail:0,total:0,error:""});return;}
     launch();
   });
 }
 function startDrawingUpload(files){
   if(!files.length)return;
-  extractFromDrawings(files).then(function(r){
+  showOcrProgress(0,files.length,0);
+  buildTasks(files).then(function(tasks){return extractFromDrawings(tasks);}).then(function(r){
     hideOcr();
     if(!r.text){
-      showInfo("도면 인식 실패","도면 "+r.total+"장에서 품목을 인식하지 못했습니다."+(r.fail?(" ("+r.fail+"장 실패)"):"")
+      showInfo("도면 인식 실패","도면/페이지 "+r.total+"건에서 품목을 인식하지 못했습니다."+(r.fail?(" ("+r.fail+"건 실패)"):"")
         +(r.error?("\n\n원인: "+r.error):"")
-        +"\n\n• 키 미설정/재배포 안 됨이면 위 원인에 그 내용이 표시됩니다.\n• 도면이 흐리면 더 선명한 이미지를 올리거나 직접 입력해 주세요.");
+        +"\n\n• 도면이 흐리면 더 선명한 이미지를 올리거나 직접 입력해 주세요.");
       return;
     }
     state.text=r.text;runPipeline();renderRun();
     if(missingResults().length>0)openFixModal();
-    else if(r.fail)showInfo("일부 인식 실패",r.total+"장 중 "+r.fail+"장은 인식에 실패해 제외했습니다."+(r.error?("\n\n예시 원인: "+r.error):"")+"\n나머지로 견적을 구성했습니다.");
-  });
+    else if(r.fail)showInfo("일부 인식 실패",r.total+"건 중 "+r.fail+"건은 실패해 제외했습니다."+(r.error?("\n\n예시 원인: "+r.error):"")+"\n나머지로 견적을 구성했습니다.");
+  }).catch(function(e){hideOcr();showInfo("처리 오류",(e&&e.message)||"파일 처리 중 오류가 발생했습니다.");});
 }
 
 function renderRun(){
   var html='<div class="card"><h2>문의 입력 (자연어·여러 줄)</h2>'
     +'<textarea id="ta" rows="5">'+esc(state.text)+'</textarea>'
     +'<div class="flx"><button class="run" id="runBtn" style="flex:1">인식 & 견적 실행</button>'
-    +'<label class="fbtn">도면·파일<input type="file" id="file" accept="image/*,application/pdf,.txt,.csv" multiple style="display:none"></label></div>'
+    +'<label class="fbtn">도면·파일<input type="file" id="file" accept="image/*,application/pdf,.txt,.csv" multiple style="display:none"></label>'
+    +'<button class="fbtn" id="clearBtn">지우기</button></div>'
     +'<div class="hint">한 줄에 한 품목. 인식: 타입(TC/SC…)·치수(오일씰 50x65x9·오링 6x3.5)·코드(P50/AS568-150/AN374)·재질·수량. <b>도면(사진·PDF)을 여러 장 한 번에 올리면 Claude 비전이 자동 인식</b>합니다.</div></div>';
   if(state.results){
     if(state.results.length===0)html+='<div class="card mut">'+(state.text.trim()?'인식된 품목이 없습니다. 타입·치수·코드·재질·수량을 확인해 주세요.':'문의 내용을 입력해 주세요.')+'</div>';
@@ -387,6 +428,7 @@ function renderRun(){
     if(draw.length){startDrawingUpload(draw);e.target.value="";return;}
     var f=fl[0];var rd=new FileReader();rd.onload=function(ev){state.text=String(ev.target.result).slice(0,4000);runPipeline();renderRun();if(missingResults().length>0)openFixModal();};rd.readAsText(f);};
   var ofb=document.getElementById("openFix");if(ofb)ofb.onclick=openFixModal;
+  var clb=document.getElementById("clearBtn");if(clb)clb.onclick=function(){state.text="";state.results=null;renderRun();};
 }
 
 function renderCfg(){
