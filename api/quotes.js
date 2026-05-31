@@ -17,6 +17,10 @@ async function ensureTable() {
 }
 
 module.exports = async function handler(req, res) {
+  // 일부 Postgres 연동(Neon 등)은 DATABASE_URL만 주입 → @vercel/postgres가 읽는 POSTGRES_URL로 보정
+  if (!process.env.POSTGRES_URL && process.env.DATABASE_URL) {
+    process.env.POSTGRES_URL = process.env.DATABASE_URL;
+  }
   if (!process.env.POSTGRES_URL) {
     res.status(503).json({
       error: "DB가 연결되지 않았습니다. Vercel 프로젝트 → Storage에서 Postgres를 만들어 이 프로젝트에 연결하면 POSTGRES_URL이 자동 설정됩니다(이후 Redeploy).",
