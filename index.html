@@ -86,6 +86,10 @@ function parseLine(line){
   else if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);category="OIL SEAL";}
   else if(dm2){var cs=parseFloat(dm2[2]);id=parseFloat(dm2[1]);od=id+2*cs;category="O-RING";}
   if(!tf&&!codeM&&!dm&&!dm2)return null;
+  // 제품군 키워드 인식: 3-치수 품목이면 OIL SEAL 대신 구체 제품군으로 분류(설정 탭에서 공식 개별 편집)
+  var hay=u+" "+raw;
+  var PRODS=[[/U-?PACKING|유.?패킹/,"U-PACKING"],[/DUST ?SEAL|더스트/,"DUST SEAL"],[/BACK ?UP ?RING|백업/,"BACK UP RING"],[/WEAR(ING)?|웨어/,"WEAR RING"]];
+  if(category==="OIL SEAL"){for(var pi=0;pi<PRODS.length;pi++){if(PRODS[pi][0].test(hay)){category=PRODS[pi][1];break;}}}
   return{category:category,type:type,material:material,id:id,od:od,h:hh,qty:qty,sourceCode:sourceCode,
     sizeSource:(id!=null&&od!=null)?"inline":sourceCode?"codeTable":"manual",
     confidence:"low",needsReview:true,rawText:raw};
@@ -116,7 +120,11 @@ function classify(item,lookup){
 // ===== 부피·견적 =====
 var DEFAULT_SHAPES={
   "O-RING":{label:"오링(도넛)",formula:"cs=(od-id)/2;r=cs/2;R=id/2+r;return 2*PI*PI*R*r*r;",needs:["id","od"]},
-  "OIL SEAL":{label:"오일씰(원통링)",formula:"return PI*h*(Math.pow(od/2,2)-Math.pow(id/2,2));",needs:["id","od","h"]}
+  "OIL SEAL":{label:"오일씰(원통링)",formula:"return PI*h*(Math.pow(od/2,2)-Math.pow(id/2,2));",needs:["id","od","h"]},
+  "U-PACKING":{label:"U-패킹(근사: 원통링)",formula:"return PI*h*(Math.pow(od/2,2)-Math.pow(id/2,2));",needs:["id","od","h"]},
+  "DUST SEAL":{label:"더스트씰(근사: 원통링)",formula:"return PI*h*(Math.pow(od/2,2)-Math.pow(id/2,2));",needs:["id","od","h"]},
+  "BACK UP RING":{label:"백업링(근사: 원통링)",formula:"return PI*h*(Math.pow(od/2,2)-Math.pow(id/2,2));",needs:["id","od","h"]},
+  "WEAR RING":{label:"웨어링(근사: 원통링)",formula:"return PI*h*(Math.pow(od/2,2)-Math.pow(id/2,2));",needs:["id","od","h"]}
 };
 function runVolume(formula,d){try{var fn=new Function("id","od","h","PI",formula);var v=fn(d.id,d.od,d.h,Math.PI);return(typeof v==="number"&&isFinite(v)&&v>0)?v:null;}catch(e){return null;}}
 function estimate(item,cfg,shapes){
@@ -166,6 +174,16 @@ var state={
   shapes:JSON.parse(JSON.stringify(DEFAULT_SHAPES)),
   tab:"run", results:null
 };
+// 설정·입력 영속화(localStorage): 단가·비중·공식·로스율·입력이 새로고침에도 유지
+function persist(){try{localStorage.setItem("hsq_v1",JSON.stringify({cfg:state.cfg,shapes:state.shapes,text:state.text}));}catch(e){}}
+(function loadSaved(){
+  try{
+    var s=JSON.parse(localStorage.getItem("hsq_v1")||"null");if(!s)return;
+    if(s.cfg)for(var k in s.cfg)state.cfg[k]=s.cfg[k];
+    if(s.shapes)for(var c in s.shapes){if(state.shapes[c]&&s.shapes[c]&&s.shapes[c].formula)state.shapes[c].formula=s.shapes[c].formula;}
+    if(typeof s.text==="string")state.text=s.text;
+  }catch(e){}
+})();
 
 function processItem(raw){
   var lookup=lookupCode(raw.sourceCode);
@@ -455,7 +473,7 @@ function renderRun(){
   }
   var pane=document.getElementById("paneRun");
   pane.innerHTML=html;
-  document.getElementById("runBtn").onclick=function(){state.text=document.getElementById("ta").value;runPipeline();renderRun();if(missingResults().length>0)openFixModal();};
+  document.getElementById("runBtn").onclick=function(){state.text=document.getElementById("ta").value;persist();runPipeline();renderRun();if(missingResults().length>0)openFixModal();};
   document.getElementById("ta").oninput=function(e){state.text=e.target.value;};
   document.getElementById("file").onchange=function(e){
     var fl=Array.prototype.slice.call(e.target.files||[]);if(!fl.length)return;
@@ -488,12 +506,12 @@ function renderCfg(){
   var pane=document.getElementById("paneCfg");
   pane.innerHTML=html;
   // 바인딩
-  Array.prototype.forEach.call(pane.querySelectorAll(".shapeF"),function(el){el.oninput=function(){state.shapes[el.getAttribute("data-cat")].formula=el.value;};});
-  Array.prototype.forEach.call(pane.querySelectorAll(".den"),function(el){el.oninput=function(){state.cfg.density[el.getAttribute("data-m")]=parseFloat(el.value)||0;};});
-  Array.prototype.forEach.call(pane.querySelectorAll(".up"),function(el){el.oninput=function(){state.cfg.unitPrice[el.getAttribute("data-m")]=parseFloat(el.value)||0;};});
-  pane.querySelector("#fc").oninput=function(e){state.cfg.fixedCost=parseFloat(e.target.value)||0;};
-  pane.querySelector("#lr").oninput=function(e){state.cfg.lossRate=parseFloat(e.target.value)||0;};
-  pane.querySelector("#qf").oninput=function(e){state.cfg.qtyFactor=parseFloat(e.target.value)||1;};
+  Array.prototype.forEach.call(pane.querySelectorAll(".shapeF"),function(el){el.oninput=function(){state.shapes[el.getAttribute("data-cat")].formula=el.value;persist();};});
+  Array.prototype.forEach.call(pane.querySelectorAll(".den"),function(el){el.oninput=function(){state.cfg.density[el.getAttribute("data-m")]=parseFloat(el.value)||0;persist();};});
+  Array.prototype.forEach.call(pane.querySelectorAll(".up"),function(el){el.oninput=function(){state.cfg.unitPrice[el.getAttribute("data-m")]=parseFloat(el.value)||0;persist();};});
+  pane.querySelector("#fc").oninput=function(e){state.cfg.fixedCost=parseFloat(e.target.value)||0;persist();};
+  pane.querySelector("#lr").oninput=function(e){state.cfg.lossRate=parseFloat(e.target.value)||0;persist();};
+  pane.querySelector("#qf").oninput=function(e){state.cfg.qtyFactor=parseFloat(e.target.value)||1;persist();};
 }
 
 function switchTab(t){
