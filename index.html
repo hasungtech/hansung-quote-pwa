@@ -71,7 +71,7 @@ function parseLine(line){
   var codeM=u.match(/\b(AS568-\d+|[PGS]\d+[A-Z]?|AN\d+|K\d+)\b/);
   var sourceCode="",category="기타",type="",id=null,od=null,hh=null;
   var tf=""; for(var i=0;i<TYPE_PREFIXES.length;i++){var p=TYPE_PREFIXES[i];if(new RegExp("\\b"+p+"\\b|\\b"+p+"(?=[\\dJN])").test(u)){tf=p;break;}}
-  var dm=u.match(/(\d+\.?\d*)\s*[x\s]\s*(\d+\.?\d*)\s*[x\s]\s*(\d+\.?\d*)/);
+  var dm=u.match(/(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)/);
   if(tf){category="OIL SEAL";type=tf;if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);}}
   else if(codeM){sourceCode=codeM[1];category=/^AS568|^[PGS]\d|^AN/.test(sourceCode)?"O-RING":"기타";}
   else if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);category="OIL SEAL";}
