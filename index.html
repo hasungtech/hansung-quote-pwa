@@ -245,6 +245,14 @@ function showOcrProgress(done,total,fail){
     +(fail?' · 실패 '+fail+'장':'')+'</div></div></div>';
 }
 function hideOcr(){var host=document.getElementById("modalHost");if(host)host.innerHTML="";}
+function showInfo(title,body){
+  var host=document.getElementById("modalHost");if(!host)return;
+  host.innerHTML='<div class="modal-bd" id="infoBd"><div class="modal"><h2>'+esc(title)+'</h2>'
+    +'<div class="hint" style="margin-top:6px;color:var(--ink);white-space:pre-wrap;line-height:1.6">'+esc(body)+'</div>'
+    +'<div class="flx"><button class="run" id="infoClose" style="flex:1">닫기</button></div></div></div>';
+  document.getElementById("infoClose").onclick=function(){host.innerHTML="";};
+  document.getElementById("infoBd").onclick=function(e){if(e.target.id==="infoBd")host.innerHTML="";};
+}
 function prepareFile(file,cb){ // cb(payload | null)
   if(/^image\//.test(file.type)){downscaleImage(file,1600,function(b,mt){cb({type:"image",media_type:mt,data:b});});}
   else if(file.type==="application/pdf"){if(file.size>4*1024*1024){cb(null);return;}fileToBase64(file,function(b){cb({type:"pdf",media_type:"application/pdf",data:b});});}
@@ -252,7 +260,7 @@ function prepareFile(file,cb){ // cb(payload | null)
 }
 function postExtract(payload,attempt){
   return fetch("/api/extract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({files:[payload]})})
-    .then(function(r){return r.json().then(function(j){return{ok:r.ok,status:r.status,j:j};});})
+    .then(function(r){return r.text().then(function(tx){var j;try{j=JSON.parse(tx);}catch(e){j={error:"서버가 JSON이 아닌 응답을 반환했습니다(HTTP "+r.status+"). 함수 미배포(404)이거나 서버 오류일 수 있습니다."};}return{ok:r.ok,status:r.status,j:j};});})
     .then(function(o){
       if(o.ok)return{text:((o.j&&o.j.text)||"").trim()};
       if((o.status===429||o.status>=500)&&attempt<2)return delay(1200*(attempt+1)).then(function(){return postExtract(payload,attempt+1);});
@@ -260,11 +268,11 @@ function postExtract(payload,attempt){
     })
     .catch(function(err){
       if(attempt<2)return delay(1200*(attempt+1)).then(function(){return postExtract(payload,attempt+1);});
-      return{error:(err&&err.message)||"network"};
+      return{error:(err&&err.message)||"네트워크 오류"};
     });
 }
 function extractFromDrawings(files){ // 동시 4개씩 한 장 단위로 처리
-  var total=files.length,done=0,fail=0,lines=[],idx=0,active=0,CONC=4;
+  var total=files.length,done=0,fail=0,lines=[],idx=0,active=0,CONC=4,firstError="";
   showOcrProgress(0,total,0);
   return new Promise(function(resolve){
     function launch(){
@@ -272,11 +280,11 @@ function extractFromDrawings(files){ // 동시 4개씩 한 장 단위로 처리
         (function(file){
           active++;
           prepareFile(file,function(payload){
-            var p=payload?postExtract(payload,0):Promise.resolve({error:"prepare"});
+            var p=payload?postExtract(payload,0):Promise.resolve({error:"파일을 읽을 수 없거나 형식·용량(4MB 초과)이 맞지 않습니다."});
             p.then(function(res){
-              if(res.error)fail++;else if(res.text)lines.push(res.text);
+              if(res.error){fail++;if(!firstError)firstError=res.error;}else if(res.text){lines.push(res.text);}
               done++;active--;showOcrProgress(done,total,fail);
-              if(done>=total)resolve({text:lines.join("\n"),fail:fail,total:total});
+              if(done>=total)resolve({text:lines.join("\n"),fail:fail,total:total,error:firstError});
               else launch();
             });
           });
@@ -290,10 +298,15 @@ function startDrawingUpload(files){
   if(!files.length)return;
   extractFromDrawings(files).then(function(r){
     hideOcr();
-    if(!r.text){alert("도면 "+r.total+"장에서 인식된 품목이 없습니다."+(r.fail?(" ("+r.fail+"장 실패)"):"")+"\n더 선명한 이미지를 올리거나 직접 입력해 주세요.");return;}
+    if(!r.text){
+      showInfo("도면 인식 실패","도면 "+r.total+"장에서 품목을 인식하지 못했습니다."+(r.fail?(" ("+r.fail+"장 실패)"):"")
+        +(r.error?("\n\n원인: "+r.error):"")
+        +"\n\n• 키 미설정/재배포 안 됨이면 위 원인에 그 내용이 표시됩니다.\n• 도면이 흐리면 더 선명한 이미지를 올리거나 직접 입력해 주세요.");
+      return;
+    }
     state.text=r.text;runPipeline();renderRun();
-    if(r.fail)alert(r.total+"장 중 "+r.fail+"장은 인식에 실패해 제외했습니다. 나머지로 견적을 구성했습니다.");
     if(missingResults().length>0)openFixModal();
+    else if(r.fail)showInfo("일부 인식 실패",r.total+"장 중 "+r.fail+"장은 인식에 실패해 제외했습니다."+(r.error?("\n\n예시 원인: "+r.error):"")+"\n나머지로 견적을 구성했습니다.");
   });
 }
 
