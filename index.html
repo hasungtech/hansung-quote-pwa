@@ -184,17 +184,17 @@ var state={
       density:{NBR:1.3,FKM:1.9,EPDM:1.2,SILICON:1.2,PU:1.2,PTFE:2.2,NYLON:1.14,PHENOLIC:1.4,STEEL:7.85,_def:1.3},
       steelPriceG:1.5,steelThk:1.2,spring:300,rubberFill:0.35,stockFactor:1.4,
       process:{mold:300,machine:1500,punch:200,bond:100,finish:100,press:200},
-      steelTypes:["TC","TCN","TCV","SC","SB","TB"],springTypes:["TC","TCN","TCV"],
+      steelTypes:["TC","TCN","TCV","SC"],springTypes:["TC","TCN","TCV","SC","TB","SB"],
       calib:{"OIL SEAL":5.39,"O-RING":1.44,"DUST SEAL":5.12,"U-PACKING":8.06,"BACK UP RING":0.69,"WEAR RING":1.0,_def:3.0}
     }},
   shapes:JSON.parse(JSON.stringify(DEFAULT_SHAPES)),
   tab:"run", results:null
 };
 // 설정·입력 영속화(localStorage): 단가·비중·공식·로스율·입력이 새로고침에도 유지
-function persist(){try{localStorage.setItem("hsq_v1",JSON.stringify({cfg:state.cfg,shapes:state.shapes,text:state.text}));}catch(e){}}
+function persist(){try{localStorage.setItem("hsq_v2",JSON.stringify({cfg:state.cfg,shapes:state.shapes,text:state.text}));}catch(e){}}
 (function loadSaved(){
   try{
-    var s=JSON.parse(localStorage.getItem("hsq_v1")||"null");if(!s)return;
+    var s=JSON.parse(localStorage.getItem("hsq_v2")||"null");if(!s)return;
     if(s.cfg)for(var k in s.cfg)state.cfg[k]=s.cfg[k];
     if(s.shapes)for(var c in s.shapes){if(state.shapes[c]&&s.shapes[c]&&s.shapes[c].formula)state.shapes[c].formula=s.shapes[c].formula;}
     if(typeof s.text==="string")state.text=s.text;
@@ -525,6 +525,36 @@ function saveQuote(btn){
     .then(function(o){if(o.ok)showInfo("저장 완료",(o.j.saved||items.length)+"건을 클라우드에 저장했습니다.");else showInfo("저장 실패",(o.j&&o.j.error)||"저장에 실패했습니다.");renderRun();})
     .catch(function(e){showInfo("저장 실패",(e&&e.message)||"네트워크 오류");renderRun();});
 }
+// ===== 견적 내보내기 (엑셀 CSV / PDF 인쇄) =====
+function quoteRows(){
+  return (state.results||[]).map(function(r){
+    if(!isPriced(r))return null;
+    var it=r.c.item,unit=r.hist?r.hist.rec:(r.cost&&r.cost.ok?r.cost.sell:null);
+    if(unit==null)return null;
+    var qty=it.qty||0,dim=(it.id!=null?(it.id+"×"+it.od+(it.h!=null?"×"+it.h:"")):"");
+    return{input:it.rawText,cat:it.category,type:it.type||"",code:it.sourceCode||"",dim:dim,mat:it.material||"",qty:qty,basis:r.hist?(r.hist.basis+"이력"):"원가적산",unit:unit,amount:qty?unit*qty:unit};
+  }).filter(function(x){return x;});
+}
+function ymd(){var d=new Date();return d.getFullYear()+("0"+(d.getMonth()+1)).slice(-2)+("0"+d.getDate()).slice(-2);}
+function dl(blob,name){var u=URL.createObjectURL(blob),a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(u);a.remove();},200);}
+function csvCell(v){v=String(v==null?"":v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;}
+function exportCSV(){
+  var rows=quoteRows();if(!rows.length){showInfo("내보내기","내보낼 견적(가격 산출된 품목)이 없습니다.");return;}
+  var L=[["입력","제품군","타입","코드","치수","재질","수량","단가근거","개당단가","금액"].join(",")];
+  rows.forEach(function(r){L.push([r.input,r.cat,r.type,r.code,r.dim,r.mat,r.qty,r.basis,r.unit,r.amount].map(csvCell).join(","));});
+  L.push(["합계","","","","","","","","",rows.reduce(function(s,r){return s+(r.amount||0);},0)].map(csvCell).join(","));
+  dl(new Blob(["﻿"+L.join("\r\n")],{type:"text/csv;charset=utf-8"}),"견적_"+ymd()+".csv");
+}
+function exportPDF(){
+  var rows=quoteRows();if(!rows.length){showInfo("내보내기","내보낼 견적(가격 산출된 품목)이 없습니다.");return;}
+  var total=rows.reduce(function(s,r){return s+(r.amount||0);},0);
+  var w=window.open("","_blank");if(!w){showInfo("PDF","팝업이 차단되었습니다. 팝업 허용 후 다시 시도하세요.");return;}
+  var b='<table><thead><tr><th>No</th><th>품목</th><th>치수</th><th>재질</th><th class=r>수량</th><th class=r>개당단가</th><th class=r>금액</th></tr></thead><tbody>';
+  rows.forEach(function(r,i){b+='<tr><td>'+(i+1)+'</td><td>'+esc(r.input)+'</td><td>'+esc(r.dim)+'</td><td>'+esc(r.mat)+'</td><td class=r>'+(r.qty||"")+'</td><td class=r>'+won(r.unit)+'</td><td class=r>'+won(r.amount)+'</td></tr>';});
+  b+='</tbody><tfoot><tr><td colspan=6 class="r tot">합계</td><td class="r tot">'+won(total)+'원</td></tr></tfoot></table>';
+  var doc='<!DOCTYPE html><html lang=ko><head><meta charset=utf-8><title>견적서</title><style>body{font-family:-apple-system,sans-serif;padding:24px;color:#111}h1{font-size:22px;letter-spacing:8px;text-align:center;margin:0 0 4px}.sub{text-align:center;color:#666;font-size:12px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}th{background:#f3f3f3}.r{text-align:right}.tot{font-weight:700;font-size:14px;background:#fafafa}.note{margin-top:14px;font-size:11px;color:#888}</style></head><body><h1>견 적 서</h1><div class=sub>한성테크 · 작성일 '+new Date().toLocaleDateString("ko-KR")+'</div>'+b+'<div class=note>※ 본 견적은 실거래 이력/원가 적산 기준 산출값입니다.</div><scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},250);}</scr'+'ipt></body></html>';
+  w.document.write(doc);w.document.close();
+}
 function histFetch(qs){return fetch("/api/quotes"+(qs||"")).then(function(r){return r.text().then(function(t){var j;try{j=JSON.parse(t);}catch(e){j={error:"서버 오류(HTTP "+r.status+")"};}return{ok:r.ok,j:j};});});}
 function openHistory(){
   var host=document.getElementById("modalHost");if(!host)return;
@@ -603,9 +633,12 @@ function renderRun(){
     }
     if(state.results.length>0){
       var saveable=collectQuoteItems();
-      html+='<div class="card" style="display:flex;gap:8px;align-items:center">'
-        +'<button class="run" id="saveBtn" style="flex:1"'+(saveable.length?'':' disabled')+'>☁ 이 견적 저장'+(saveable.length?' ('+saveable.length+'건)':' (저장할 견적 없음)')+'</button>'
-        +'<button class="fbtn" id="histBtn">저장 이력</button></div>';
+      html+='<div class="card">'
+        +'<button class="run" id="saveBtn" style="width:100%"'+(saveable.length?'':' disabled')+'>☁ 이 견적 저장'+(saveable.length?' ('+saveable.length+'건)':' (저장할 견적 없음)')+'</button>'
+        +'<div class="flx" style="margin-top:8px">'
+        +'<button class="fbtn" id="histBtn" style="flex:1">저장 이력</button>'
+        +'<button class="fbtn" id="csvBtn" style="flex:1">엑셀</button>'
+        +'<button class="fbtn" id="pdfBtn" style="flex:1">PDF</button></div></div>';
     }
     state.results.forEach(function(r){
       html+='<div class="res"><div class="in"><b>입력:</b> <span class="mut">'+esc(r.raw.rawText)+'</span></div><div class="bd">';
@@ -671,6 +704,8 @@ function renderRun(){
   var clb=document.getElementById("clearBtn");if(clb)clb.onclick=function(){state.text="";state.results=null;renderRun();};
   var svb=document.getElementById("saveBtn");if(svb)svb.onclick=function(){saveQuote(this);};
   var hsb=document.getElementById("histBtn");if(hsb)hsb.onclick=openHistory;
+  var cvb=document.getElementById("csvBtn");if(cvb)cvb.onclick=exportCSV;
+  var pvb=document.getElementById("pdfBtn");if(pvb)pvb.onclick=exportPDF;
 }
 
 function renderCfg(){
