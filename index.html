@@ -59,7 +59,7 @@
   <div class="tabs"><div class="tab on" id="tabRun">견적 실행</div><div class="tab" id="tabCfg">공식·설정값</div></div>
   <div id="paneRun"></div>
   <div id="paneCfg" style="display:none"></div>
-  <div class="hint" style="margin-top:16px">hansung-quote 실제 로직 복제. 텍스트는 데모 파서, 도면(사진·PDF)은 Claude 비전으로 인식. 매칭 샘플 4개(실제 8,692개). 부피공식·비중·단가·로스율 설정 탭에서 조정.</div>
+  <div class="hint" style="margin-top:16px">텍스트·도면(사진·PDF, Claude 비전) 인식 → 실거래·견적 이력 약 26만건(2024~) 기반 추천가. 이력 없으면 무게기반 추정. 비중·단가·부피공식은 설정 탭에서 조정.</div>
 </div>
 <button id="installBtn" class="install">홈 화면에 설치</button>
 <div id="modalHost"></div>
@@ -185,12 +185,37 @@ function persist(){try{localStorage.setItem("hsq_v1",JSON.stringify({cfg:state.c
   }catch(e){}
 })();
 
+// ===== 실거래 가격이력 매칭 (price_history.json) =====
+var PRICE_HISTORY=null;
+function loadPriceHistory(){
+  fetch("price_history.json").then(function(r){return r.ok?r.json():null;}).then(function(j){
+    if(j){PRICE_HISTORY=j;if(state.tab==="run"){runPipeline();renderRun();}}
+  }).catch(function(){});
+}
+function nm(x){return String(Math.round(parseFloat(x)*100)/100);}
+function histKeys(it){
+  var ks=[],mat=it.material||"";
+  if(it.sourceCode){var c=String(it.sourceCode).toUpperCase().replace(/[\s-]/g,"");if(mat)ks.push("C:"+c+"|"+mat);ks.push("C:"+c);}
+  if(it.id!=null&&it.od!=null){
+    if(it.h!=null){
+      if(it.type){if(mat)ks.push("D:"+it.type+":"+nm(it.id)+"x"+nm(it.od)+"x"+nm(it.h)+"|"+mat);ks.push("D:"+it.type+":"+nm(it.id)+"x"+nm(it.od)+"x"+nm(it.h));}
+      else ks.push("D::"+nm(it.id)+"x"+nm(it.od)+"x"+nm(it.h));
+    }else if(it.category==="O-RING"){var cs=(it.od-it.id)/2;if(mat)ks.push("D::"+nm(it.id)+"x"+nm(cs)+"|"+mat);ks.push("D::"+nm(it.id)+"x"+nm(cs));}
+  }
+  return ks;
+}
+function histMatch(it){
+  if(!PRICE_HISTORY)return null;
+  var ks=histKeys(it);
+  for(var i=0;i<ks.length;i++){var v=PRICE_HISTORY[ks[i]];if(v){return{key:ks[i],wonMed:v[0],wonN:v[1],wonMin:v[2],wonMax:v[3],quoMed:v[4],quoN:v[5],rec:v[0]>0?v[0]:v[4],basis:v[0]>0?"실거래":"견적"};}}
+  return null;
+}
 function processItem(raw){
   var lookup=lookupCode(raw.sourceCode);
   var c=classify(raw,lookup);
-  var matches=[],est=null;
-  if(c.item.confidence==="high"){matches=matchHistory(c.item);if(matches.length===0)est=estimate(c.item,state.cfg,state.shapes);}
-  return{raw:raw,lookup:lookup,c:c,matches:matches,est:est};
+  var matches=[],est=null,hist=null;
+  if(c.item.confidence==="high"){hist=histMatch(c.item);est=estimate(c.item,state.cfg,state.shapes);}
+  return{raw:raw,lookup:lookup,c:c,matches:matches,est:est,hist:hist};
 }
 function runPipeline(){state.results=parseText(state.text).map(processItem);}
 
@@ -375,7 +400,7 @@ function startDrawingUpload(files){
 function collectQuoteItems(){
   return (state.results||[]).filter(function(r){return r.c.item.confidence==="high";}).map(function(r){
     var it=r.c.item,price=null,basis="";
-    if(r.matches&&r.matches.length){price=r.matches[0].recommendedPrice.value;basis="이력";}
+    if(r.hist){price=r.hist.rec;basis=r.hist.basis;}
     else if(r.est&&r.est.ok){price=Math.round(r.est.unitPrice);basis="신규";}
     return{raw:it.rawText,category:it.category,type:it.type||"",code:it.sourceCode||"",material:it.material||"",id:it.id,od:it.od,h:it.h,qty:it.qty,unit_price:price,basis:basis};
   }).filter(function(x){return x.unit_price!=null;});
@@ -450,14 +475,14 @@ function renderRun(){
         r.c.reasons.forEach(function(rs){html+='<li>'+esc(GUIDE[rs]||RL[rs]||rs)+'</li>';});
         if(r.c.candidates)html+='<li>후보 '+r.c.candidates.length+'개 중 하나를 선택해 주세요.</li>';
         html+='</ul></div>';
-      }else if(r.matches.length>0){
-        html+='<b>수주이력 매칭</b><table><thead><tr><th>코드</th><th>수주율</th><th>거래처</th><th>추천가</th><th>근거</th></tr></thead><tbody>';
-        r.matches.forEach(function(m){
-          html+='<tr><td>'+esc(m.code)+'</td><td class="'+(m.winRate>=40?"hi":m.winRate>0?"":"lo")+'">'+m.winRate+'%</td><td>'+m.customers+'곳</td>'
-            +'<td style="text-align:right;font-weight:700">'+won(m.recommendedPrice.value)+'원</td>'
-            +'<td class="mut">'+(m.recommendedPrice.basis==="won"?"실수주":m.recommendedPrice.basis==="quote"?"견적":"—")+'</td></tr>';
-        });
-        html+='</tbody></table>';
+      }else if(r.hist){
+        var H=r.hist;
+        html+='<b>실거래 이력 추천가</b><div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.7">'
+          +(H.wonN?('실판매 '+H.wonN+'건 · 범위 '+won(H.wonMin)+'~'+won(H.wonMax)+'원'):'실판매 이력 없음')
+          +(H.quoN?(' · 견적 '+H.quoN+'건(중앙값 '+won(H.quoMed)+'원)'):'')
+          +'</div>'
+          +'<div class="price"><span style="font-size:12px;color:var(--muted)">추천가(개당) · '+H.basis+' 중앙값</span><b>'+won(H.rec)+'원</b></div>'
+          +(r.est&&r.est.ok?'<div class="mut" style="font-size:11px;margin-top:4px">참고: 무게기반 추정 '+won(r.est.unitPrice)+'원</div>':'');
       }else if(r.est){
         if(r.est.ok){
           html+='<b>신규 견적(무게 기반)</b><div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.7">'
@@ -528,6 +553,7 @@ document.getElementById("tabCfg").onclick=function(){switchTab("config");};
 // 초기 실행
 runPipeline();
 renderRun();
+loadPriceHistory();
 
 // ===== PWA service worker =====
 if("serviceWorker" in navigator){
