@@ -73,7 +73,7 @@ var TYPE_PREFIXES=["TCN","TCV","TC","SC","SB","TB","VF","VH","DSI","SKY","VA","V
 var MAT={HNBR:"HNBR",FFKM:"FFKM","칼레즈":"FFKM",VITON:"FKM","바이톤":"FKM",FKM:"FKM",EPDM:"EPDM",SILICONE:"SILICON",SILICON:"SILICON","실리콘":"SILICON","폴리우레탄":"PU","우레탄":"PU","유레탄":"PU",URETHANE:"PU",POLYURETHANE:"PU",PU:"PU",PTFE:"PTFE","테프론":"PTFE",TEFLON:"PTFE",POM:"POM","네오프렌":"CR",NEOPRENE:"CR",AFLAS:"AFLAS","아프라스":"AFLAS",NBR:"NBR","니트릴":"NBR"};
 function parseLine(line){
   var raw=line.trim(); if(!raw)return null;
-  var u=raw.toUpperCase().replace(/[×*]/g,"x").replace(/,(\d)/g,".$1");
+  var u=raw.toUpperCase().replace(/[×✕╳⨯＊*・·•∙ㆍｘＸ]/g,"x").replace(/,(\d)/g,".$1");
   var material=""; for(var k in MAT){if(u.indexOf(k)>=0){material=MAT[k];break;}}
   var qty=0; var qm=raw.match(/(\d+)\s*(개|EA|ea|pcs|PCS|장)/); if(qm)qty=parseInt(qm[1]);
   var codeM=u.match(/\b(AS568-\d+|[PGS]-?\d+(?:\.\d+)?[A-Z]?|AN-?\d+|K-?\d+)\b/);
@@ -747,7 +747,7 @@ function renderRun(){
       if(H){
         html+='<div style="margin-top:8px"><b>실거래 이력</b> <span class="mut" style="font-size:11px">['+esc(keyDesc(H.key))+']</span>'
           +'<div class="mut" style="font-size:12px">'+H.basis+' '+H.n+'건 · 범위 '+won(H.min)+'~'+won(H.max)+'원'+(H.vol?' <span class="lo">⚠편차큼</span>':'')+'</div>';
-        if(H.samples&&H.samples.length){html+='<table style="margin-top:2px"><tbody>';H.samples.forEach(function(s){html+='<tr><td class="mut">'+esc(s[0])+'</td><td style="text-align:right">'+won(s[1])+'원</td></tr>';});html+='</tbody></table>';}
+        if(H.samples&&H.samples.length){html+='<div class="mut" style="font-size:11px;margin-top:4px">최근 판매이력</div><table style="margin-top:2px"><thead><tr><th>날짜</th><th>거래처</th><th class="r" style="text-align:right">수량</th><th class="r" style="text-align:right">단가</th></tr></thead><tbody>';H.samples.forEach(function(s){html+='<tr><td class="mut">'+esc(s[0])+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td></tr>';});html+='</tbody></table>';}
         html+='</div>';
       }else if(comps.length){
         html+='<div style="margin-top:8px"><b>유사 실거래 (교차검증)</b><table style="margin-top:2px"><thead><tr><th>규격</th><th>재질</th><th style="text-align:right">단가</th></tr></thead><tbody>';
