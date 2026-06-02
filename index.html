@@ -413,16 +413,57 @@ function saveQuote(btn){
     .then(function(o){if(o.ok)showInfo("저장 완료",(o.j.saved||items.length)+"건을 클라우드에 저장했습니다.");else showInfo("저장 실패",(o.j&&o.j.error)||"저장에 실패했습니다.");renderRun();})
     .catch(function(e){showInfo("저장 실패",(e&&e.message)||"네트워크 오류");renderRun();});
 }
-function loadHistory(){
-  fetch("/api/quotes").then(function(r){return r.text().then(function(t){var j;try{j=JSON.parse(t);}catch(e){j={error:"서버가 JSON이 아닌 응답(HTTP "+r.status+")"};}return{ok:r.ok,j:j};});})
-    .then(function(o){
-      if(!o.ok){showInfo("이력 불러오기 실패",(o.j&&o.j.error)||"불러오지 못했습니다.");return;}
-      var rows=(o.j&&o.j.batches)||[];
-      if(!rows.length){showInfo("저장 이력","아직 저장된 견적이 없습니다.");return;}
-      var body=rows.map(function(b){var d=new Date(b.created_at);return d.toLocaleString("ko-KR")+"  ·  "+b.n+"건  ·  "+won(Number(b.total))+"원";}).join("\n");
-      showInfo("저장 이력 ("+rows.length+")",body);
-    })
-    .catch(function(e){showInfo("이력 불러오기 실패",(e&&e.message)||"네트워크 오류");});
+function histFetch(qs){return fetch("/api/quotes"+(qs||"")).then(function(r){return r.text().then(function(t){var j;try{j=JSON.parse(t);}catch(e){j={error:"서버 오류(HTTP "+r.status+")"};}return{ok:r.ok,j:j};});});}
+function openHistory(){
+  var host=document.getElementById("modalHost");if(!host)return;
+  host.innerHTML='<div class="modal-bd" id="hbd"><div class="modal"><h2>저장 이력</h2>'
+    +'<input id="hq" placeholder="품목 검색 (예: P285, 240x270, NBR)" inputmode="search">'
+    +'<div id="hlist" class="hint" style="margin-top:10px;max-height:50vh;overflow:auto">불러오는 중…</div>'
+    +'<div class="flx"><button class="run" id="hclose" style="flex:1">닫기</button></div></div></div>';
+  var q=document.getElementById("hq"),list=document.getElementById("hlist"),timer=null;
+  document.getElementById("hbd").onclick=function(e){if(e.target.id==="hbd")host.innerHTML="";};
+  document.getElementById("hclose").onclick=function(){host.innerHTML="";};
+  function batchRow(b){
+    return '<div style="border-top:1px solid var(--line);padding:8px 0">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
+      +'<span style="font-size:12.5px"><b>'+new Date(b.created_at).toLocaleString("ko-KR")+'</b><br><span class="mut">'+b.n+'건 · '+won(Number(b.total))+'원</span></span>'
+      +'<span style="white-space:nowrap"><button class="fbtn hopen" data-b="'+esc(b.batch_id)+'">열기</button> '
+      +'<button class="fbtn hdel" data-b="'+esc(b.batch_id)+'" style="border-color:var(--accent);color:var(--accent)">삭제</button></span></div>'
+      +'<div class="hitems" data-b="'+esc(b.batch_id)+'" style="margin-top:6px"></div></div>';
+  }
+  function itemLine(it,withDate){
+    return '<div class="mut" style="font-size:12px;padding:2px 0">'+(withDate?(new Date(it.created_at).toLocaleDateString("ko-KR")+' · '):'')
+      +esc(it.raw||"")+' — '+(it.qty||"")+'개 × '+won(it.unit_price)+'원 <span style="color:var(--accent)">'+esc(it.basis||"")+'</span></div>';
+  }
+  function bind(){
+    Array.prototype.forEach.call(list.querySelectorAll(".hopen"),function(el){el.onclick=function(){
+      var bid=el.getAttribute("data-b"),box=list.querySelector('.hitems[data-b="'+bid+'"]');
+      if(box.innerHTML){box.innerHTML="";return;}
+      box.innerHTML="불러오는 중…";
+      histFetch("?batch="+encodeURIComponent(bid)).then(function(o){var its=(o.j&&o.j.items)||[];box.innerHTML=its.length?its.map(function(it){return itemLine(it,false);}).join(""):"항목 없음";});
+    };});
+    Array.prototype.forEach.call(list.querySelectorAll(".hdel"),function(el){el.onclick=function(){
+      var bid=el.getAttribute("data-b");if(!confirm("이 저장 건을 삭제할까요?"))return;
+      fetch("/api/quotes?batch="+encodeURIComponent(bid),{method:"DELETE"}).then(function(){batches();});
+    };});
+  }
+  function batches(){
+    histFetch("").then(function(o){
+      if(!o.ok){list.innerHTML=esc((o.j&&o.j.error)||"불러오기 실패");return;}
+      var rows=(o.j.batches)||[];
+      list.innerHTML=rows.length?rows.map(batchRow).join(""):"아직 저장된 견적이 없습니다.";
+      bind();
+    });
+  }
+  function search(t){
+    list.innerHTML="검색 중…";
+    histFetch("?q="+encodeURIComponent(t)).then(function(o){
+      var its=(o.j&&o.j.items)||[];
+      list.innerHTML=its.length?('<div class="mut" style="font-size:11px;margin-bottom:4px">검색 결과 '+its.length+'건</div>'+its.map(function(it){return itemLine(it,true);}).join("")):"검색 결과 없음";
+    });
+  }
+  q.oninput=function(){clearTimeout(timer);var t=q.value.trim();timer=setTimeout(function(){t?search(t):batches();},350);};
+  batches();
 }
 
 function renderRun(){
@@ -508,7 +549,7 @@ function renderRun(){
   var ofb=document.getElementById("openFix");if(ofb)ofb.onclick=openFixModal;
   var clb=document.getElementById("clearBtn");if(clb)clb.onclick=function(){state.text="";state.results=null;renderRun();};
   var svb=document.getElementById("saveBtn");if(svb)svb.onclick=function(){saveQuote(this);};
-  var hsb=document.getElementById("histBtn");if(hsb)hsb.onclick=loadHistory;
+  var hsb=document.getElementById("histBtn");if(hsb)hsb.onclick=openHistory;
 }
 
 function renderCfg(){

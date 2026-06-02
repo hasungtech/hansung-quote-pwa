@@ -31,6 +31,23 @@ module.exports = async function handler(req, res) {
     await ensureTable();
 
     if (req.method === "GET") {
+      if (req.query && req.query.q) {
+        const pat = "%" + String(req.query.q).trim() + "%";
+        const { rows } = await sql`
+          SELECT raw, qty, unit_price, basis, created_at, material
+          FROM quote_items
+          WHERE raw ILIKE ${pat} OR code ILIKE ${pat}
+          ORDER BY created_at DESC LIMIT 100`;
+        res.status(200).json({ items: rows });
+        return;
+      }
+      if (req.query && req.query.batch) {
+        const { rows } = await sql`
+          SELECT raw, qty, unit_price, basis, material, category, type, code
+          FROM quote_items WHERE batch_id=${String(req.query.batch)} ORDER BY id`;
+        res.status(200).json({ items: rows });
+        return;
+      }
       const { rows } = await sql`
         SELECT batch_id,
                MIN(created_at) AS created_at,
@@ -41,6 +58,16 @@ module.exports = async function handler(req, res) {
         ORDER BY MIN(created_at) DESC
         LIMIT 50`;
       res.status(200).json({ batches: rows });
+      return;
+    }
+
+    if (req.method === "DELETE") {
+      if (!req.query || !req.query.batch) {
+        res.status(400).json({ error: "batch 파라미터가 필요합니다." });
+        return;
+      }
+      const { rowCount } = await sql`DELETE FROM quote_items WHERE batch_id=${String(req.query.batch)}`;
+      res.status(200).json({ ok: true, deleted: rowCount });
       return;
     }
 
@@ -66,7 +93,7 @@ module.exports = async function handler(req, res) {
       return;
     }
 
-    res.status(405).json({ error: "GET 또는 POST만 허용됩니다." });
+    res.status(405).json({ error: "허용되지 않은 메서드입니다." });
   } catch (e) {
     const m = e && e.message ? e.message : String(e);
     res.status(500).json({ error: "DB 오류: " + m });
