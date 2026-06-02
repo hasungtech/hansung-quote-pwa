@@ -193,11 +193,56 @@ function persist(){try{localStorage.setItem("hsq_v1",JSON.stringify({cfg:state.c
 })();
 
 // ===== 실거래 가격이력 매칭 (price_history.json) =====
-var PRICE_HISTORY=null;
+var PRICE_HISTORY=null, HIST_IDX=null;
 function loadPriceHistory(){
   fetch("price_history.json").then(function(r){return r.ok?r.json():null;}).then(function(j){
-    if(j){PRICE_HISTORY=j;if(state.tab==="run"){runPipeline();renderRun();}}
+    if(j){PRICE_HISTORY=j;buildHistIndex();if(state.tab==="run"){runPipeline();renderRun();runAIPricing();}}
   }).catch(function(){});
+}
+// 유사품 검색용 인덱스: 타입별 (치수·재질·최근가) 점들
+function buildHistIndex(){
+  HIST_IDX={byType:{}};
+  for(var k in PRICE_HISTORY){
+    var v=PRICE_HISTORY[k],s=v[5];if(!s||!s.length)continue;
+    var mat="",key=k,bar=k.indexOf("|");if(bar>=0){mat=k.slice(bar+1);key=k.slice(0,bar);}
+    if(key.indexOf("D:")!==0)continue;
+    var body=key.slice(2),ci=body.indexOf(":"),type=body.slice(0,ci),dims=body.slice(ci+1).split("x").map(parseFloat);
+    if(dims.length<2||isNaN(dims[0])||isNaN(dims[1]))continue;
+    (HIST_IDX.byType[type]=HIST_IDX.byType[type]||[]).push({id:dims[0],od:dims[1],h:(dims.length>2&&!isNaN(dims[2]))?dims[2]:null,mat:mat,price:s[0][1],n:v[1]});
+  }
+}
+function findComparables(it){
+  if(!HIST_IDX)return [];
+  var pool=(it.type&&HIST_IDX.byType[it.type])||HIST_IDX.byType[""]||[];
+  if(!pool.length)return [];
+  var mat=it.material||"";
+  return pool.map(function(p){
+    var d=Math.abs((p.id||0)-(it.id||0))+Math.abs((p.od||0)-(it.od||0))+Math.abs((p.h||0)-(it.h||0));
+    if(mat&&p.mat&&p.mat!==mat)d+=80;
+    return{p:p,d:d};
+  }).sort(function(a,b){return a.d-b.d;}).slice(0,6).map(function(o){
+    return{dim:nm(o.p.id)+"×"+nm(o.p.od)+(o.p.h!=null?"×"+nm(o.p.h):""),mat:o.p.mat,price:o.p.price,n:o.p.n};
+  });
+}
+function runAIPricing(){
+  if(!state.results||!HIST_IDX)return;
+  var need=[];
+  state.results.forEach(function(r,i){
+    if(r.hist||r.ai||r.aiLoading)return;
+    var it=r.c.item;if(it.id==null||it.od==null||!it.material)return;
+    var comps=findComparables(it);if(!comps.length)return;
+    r.aiLoading=true;
+    need.push({idx:i,item:{type:it.type||"",category:it.category,id:it.id,od:it.od,h:it.h,material:it.material},comparables:comps});
+  });
+  if(!need.length)return;
+  renderRun();
+  fetch("/api/price",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:need})})
+    .then(function(r){return r.json();}).then(function(j){
+      var arr=(j&&j.results)||[];
+      arr.forEach(function(a){var r=state.results[a.idx];if(r&&a.price){r.ai={price:Math.round(a.price),confidence:a.confidence||"",reasoning:a.reasoning||"",nComp:findComparables(r.c.item).length};}});
+      need.forEach(function(n){if(state.results[n.idx])state.results[n.idx].aiLoading=false;});
+      renderRun();
+    }).catch(function(){need.forEach(function(n){if(state.results[n.idx])state.results[n.idx].aiLoading=false;});renderRun();});
 }
 function nm(x){return String(Math.round(parseFloat(x)*100)/100);}
 function histKeys(it){
@@ -236,7 +281,7 @@ function processItem(raw){
   if(priceable){hist=histMatch(c.item);est=estimate(c.item,state.cfg,state.shapes);}
   return{raw:raw,lookup:lookup,c:c,matches:matches,est:est,hist:hist};
 }
-function isPriced(r){return !!(r.hist||(r.est&&r.est.ok));}
+function isPriced(r){return !!(r.hist||(r.ai&&r.ai.price)||(r.est&&r.est.ok));}
 function runPipeline(){state.results=parseText(state.text).map(processItem);}
 
 // ===== 빠진 정보 입력 창(모달) =====
@@ -285,7 +330,7 @@ function openFixModal(){
       if(vQty!=="")raw.qty=parseInt(vQty,10);
       state.results[i]=processItem(raw);
     });
-    closeFixModal();renderRun();
+    closeFixModal();renderRun();runAIPricing();
   };
 }
 
@@ -411,7 +456,7 @@ function startDrawingUpload(files){
         +"\n\n• 도면이 흐리면 더 선명한 이미지를 올리거나 직접 입력해 주세요.");
       return;
     }
-    state.text=r.text;runPipeline();renderRun();
+    state.text=r.text;runPipeline();renderRun();runAIPricing();
     if(missingResults().length>0)openFixModal();
     else if(r.fail)showInfo("일부 인식 실패",r.total+"건 중 "+r.fail+"건은 실패해 제외했습니다."+(r.error?("\n\n예시 원인: "+r.error):"")+"\n나머지로 견적을 구성했습니다.");
   }).catch(function(e){hideOcr();showInfo("처리 오류",(e&&e.message)||"파일 처리 중 오류가 발생했습니다.");});
@@ -422,6 +467,7 @@ function collectQuoteItems(){
   return (state.results||[]).filter(function(r){return r.c.item.confidence==="high";}).map(function(r){
     var it=r.c.item,price=null,basis="";
     if(r.hist){price=r.hist.rec;basis=r.hist.basis;}
+    else if(r.ai&&r.ai.price){price=r.ai.price;basis="AI추정";}
     else if(r.est&&r.est.ok){price=Math.round(r.est.unitPrice);basis="신규";}
     return{raw:it.rawText,category:it.category,type:it.type||"",code:it.sourceCode||"",material:it.material||"",id:it.id,od:it.od,h:it.h,qty:it.qty,unit_price:price,basis:basis};
   }).filter(function(x){return x.unit_price!=null;});
@@ -557,6 +603,17 @@ function renderRun(){
           html+='</tbody></table></div>';
         }
         html+=(r.est&&r.est.ok?'<div class="mut" style="font-size:11px;margin-top:4px">참고: 무게기반 추정 '+won(r.est.unitPrice)+'원</div>':'');
+      }else if(r.aiLoading){
+        html+='<div class="mut" style="font-size:12.5px;padding:6px 0">🤖 AI가 유사 실거래로 가격 분석 중…</div>';
+      }else if(r.ai){
+        var A=r.ai;
+        html+='<b>AI 추정가</b>'
+          +'<div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.7">'
+          +'<b style="color:var(--ink)">근거</b> · 정확한 이력 없음 → 유사 실거래 '+(A.nComp||0)+'건을 AI가 분석'
+          +(A.confidence?' <span class="'+(A.confidence==="high"?"hi":A.confidence==="low"?"lo":"mut")+'">[신뢰도 '+esc(A.confidence)+']</span>':'')
+          +(A.reasoning?'<br>'+esc(A.reasoning):'')+'</div>'
+          +'<div class="price"><span style="font-size:12px;color:var(--muted)">AI 추정가(개당)</span><b>'+won(A.price)+'원</b></div>'
+          +(r.est&&r.est.ok?'<div class="mut" style="font-size:11px;margin-top:4px">참고: 무게기반 추정 '+won(r.est.unitPrice)+'원</div>':'');
       }else if(r.est){
         if(r.est.ok){
           html+='<b>신규 견적(무게 기반)</b>'
@@ -576,13 +633,13 @@ function renderRun(){
   }
   var pane=document.getElementById("paneRun");
   pane.innerHTML=html;
-  document.getElementById("runBtn").onclick=function(){state.text=document.getElementById("ta").value;persist();runPipeline();renderRun();if(missingResults().length>0)openFixModal();};
+  document.getElementById("runBtn").onclick=function(){state.text=document.getElementById("ta").value;persist();runPipeline();renderRun();runAIPricing();if(missingResults().length>0)openFixModal();};
   document.getElementById("ta").oninput=function(e){state.text=e.target.value;};
   document.getElementById("file").onchange=function(e){
     var fl=Array.prototype.slice.call(e.target.files||[]);if(!fl.length)return;
     var draw=fl.filter(function(f){return /^image\//.test(f.type)||f.type==="application/pdf";});
     if(draw.length){startDrawingUpload(draw);e.target.value="";return;}
-    var f=fl[0];var rd=new FileReader();rd.onload=function(ev){state.text=String(ev.target.result).slice(0,4000);runPipeline();renderRun();if(missingResults().length>0)openFixModal();};rd.readAsText(f);};
+    var f=fl[0];var rd=new FileReader();rd.onload=function(ev){state.text=String(ev.target.result).slice(0,4000);runPipeline();renderRun();runAIPricing();if(missingResults().length>0)openFixModal();};rd.readAsText(f);};
   var ofb=document.getElementById("openFix");if(ofb)ofb.onclick=openFixModal;
   var clb=document.getElementById("clearBtn");if(clb)clb.onclick=function(){state.text="";state.results=null;renderRun();};
   var svb=document.getElementById("saveBtn");if(svb)svb.onclick=function(){saveQuote(this);};
