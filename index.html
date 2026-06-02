@@ -177,7 +177,7 @@ function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;
 // ===== 상태 =====
 var state={
   text:"현대당진 오일씰 TC 50x65x9 NBR 30개\nP50 NBR 100개\nAN374 FKM 20개\nTC 40x62x11 50개",
-  cfg:{density:{NBR:1.3,FKM:1.9,EPDM:1.2,SILICON:1.2},unitPrice:{NBR:129,FKM:645,EPDM:154.8,SILICON:258},fixedCost:150,lossRate:0.1,qtyFactor:1,fallbackDensity:1.3,fallbackUnitPrice:129},
+  cfg:{density:{NBR:1.3,FKM:1.9,EPDM:1.2,SILICON:1.2},unitPrice:{NBR:129,FKM:645,EPDM:154.8,SILICON:258},fixedCost:150,lossRate:0.1,qtyFactor:1,fallbackDensity:1.3,fallbackUnitPrice:129,ai:{nComp:6,sameMatOnly:false,margin:1,policy:""}},
   shapes:JSON.parse(JSON.stringify(DEFAULT_SHAPES)),
   tab:"run", results:null
 };
@@ -211,16 +211,18 @@ function buildHistIndex(){
     (HIST_IDX.byType[type]=HIST_IDX.byType[type]||[]).push({id:dims[0],od:dims[1],h:(dims.length>2&&!isNaN(dims[2]))?dims[2]:null,mat:mat,price:s[0][1],n:v[1]});
   }
 }
+function aiCfg(){var a=(state.cfg&&state.cfg.ai)||{};return{nComp:a.nComp||6,sameMatOnly:!!a.sameMatOnly,margin:a.margin||1,policy:a.policy||""};}
 function findComparables(it){
   if(!HIST_IDX)return [];
+  var cfg=aiCfg(),mat=it.material||"";
   var pool=(it.type&&HIST_IDX.byType[it.type])||HIST_IDX.byType[""]||[];
+  if(cfg.sameMatOnly&&mat)pool=pool.filter(function(p){return p.mat===mat;});
   if(!pool.length)return [];
-  var mat=it.material||"";
   return pool.map(function(p){
     var d=Math.abs((p.id||0)-(it.id||0))+Math.abs((p.od||0)-(it.od||0))+Math.abs((p.h||0)-(it.h||0));
     if(mat&&p.mat&&p.mat!==mat)d+=80;
     return{p:p,d:d};
-  }).sort(function(a,b){return a.d-b.d;}).slice(0,6).map(function(o){
+  }).sort(function(a,b){return a.d-b.d;}).slice(0,cfg.nComp).map(function(o){
     return{dim:nm(o.p.id)+"×"+nm(o.p.od)+(o.p.h!=null?"×"+nm(o.p.h):""),mat:o.p.mat,price:o.p.price,n:o.p.n};
   });
 }
@@ -231,15 +233,16 @@ function runAIPricing(){
     if(r.hist||r.ai||r.aiLoading)return;
     var it=r.c.item;if(it.id==null||it.od==null||!it.material)return;
     var comps=findComparables(it);if(!comps.length)return;
-    r.aiLoading=true;
+    r.aiLoading=true;r.aiComps=comps;
     need.push({idx:i,item:{type:it.type||"",category:it.category,id:it.id,od:it.od,h:it.h,material:it.material},comparables:comps});
   });
   if(!need.length)return;
   renderRun();
-  fetch("/api/price",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:need})})
+  var mg=aiCfg().margin;
+  fetch("/api/price",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:need,policy:aiCfg().policy})})
     .then(function(r){return r.json();}).then(function(j){
       var arr=(j&&j.results)||[];
-      arr.forEach(function(a){var r=state.results[a.idx];if(r&&a.price){r.ai={price:Math.round(a.price),confidence:a.confidence||"",reasoning:a.reasoning||"",nComp:findComparables(r.c.item).length};}});
+      arr.forEach(function(a){var r=state.results[a.idx];if(r&&a.price){r.ai={raw:Math.round(a.price),price:Math.round(a.price*mg),margin:mg,confidence:a.confidence||"",reasoning:a.reasoning||"",comps:r.aiComps||[]};}});
       need.forEach(function(n){if(state.results[n.idx])state.results[n.idx].aiLoading=false;});
       renderRun();
     }).catch(function(){need.forEach(function(n){if(state.results[n.idx])state.results[n.idx].aiLoading=false;});renderRun();});
@@ -606,13 +609,18 @@ function renderRun(){
       }else if(r.aiLoading){
         html+='<div class="mut" style="font-size:12.5px;padding:6px 0">🤖 AI가 유사 실거래로 가격 분석 중…</div>';
       }else if(r.ai){
-        var A=r.ai;
+        var A=r.ai,comps=A.comps||[];
         html+='<b>AI 추정가</b>'
           +'<div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.7">'
-          +'<b style="color:var(--ink)">근거</b> · 정확한 이력 없음 → 유사 실거래 '+(A.nComp||0)+'건을 AI가 분석'
+          +'<b style="color:var(--ink)">근거</b> · 정확한 이력 없음 → 유사 실거래 '+comps.length+'건을 AI가 분석'
           +(A.confidence?' <span class="'+(A.confidence==="high"?"hi":A.confidence==="low"?"lo":"mut")+'">[신뢰도 '+esc(A.confidence)+']</span>':'')
-          +(A.reasoning?'<br>'+esc(A.reasoning):'')+'</div>'
-          +'<div class="price"><span style="font-size:12px;color:var(--muted)">AI 추정가(개당)</span><b>'+won(A.price)+'원</b></div>'
+          +(A.reasoning?'<br>'+esc(A.reasoning):'')+'</div>';
+        if(comps.length){
+          html+='<div style="margin-top:6px"><div class="mut" style="font-size:11px">분석에 사용한 유사 실거래</div><table style="margin-top:2px"><thead><tr><th>규격</th><th>재질</th><th style="text-align:right">단가</th></tr></thead><tbody>';
+          comps.forEach(function(c){html+='<tr><td class="mono">'+esc(c.dim)+'</td><td>'+esc(c.mat||"-")+'</td><td style="text-align:right;font-weight:600">'+won(c.price)+'원</td></tr>';});
+          html+='</tbody></table></div>';
+        }
+        html+='<div class="price"><span style="font-size:12px;color:var(--muted)">AI 추정가(개당)'+(A.margin&&A.margin!==1?' · 원가추정 '+won(A.raw)+' ×'+A.margin+'(마진)':'')+'</span><b>'+won(A.price)+'원</b></div>'
           +(r.est&&r.est.ok?'<div class="mut" style="font-size:11px;margin-top:4px">참고: 무게기반 추정 '+won(r.est.unitPrice)+'원</div>':'');
       }else if(r.est){
         if(r.est.ok){
@@ -662,7 +670,17 @@ function renderCfg(){
     +'<div><label>고정비(원/개)</label><input id="fc" value="'+c.fixedCost+'"></div>'
     +'<div><label>로스율(0.1=10%)</label><input id="lr" value="'+c.lossRate+'"></div>'
     +'<div><label>수량계수</label><input id="qf" value="'+c.qtyFactor+'"></div></div>'
-    +'<div class="hint">기본값은 8,692개 견적 역산 + 표준 가정. 실제 견적과 비교하며 조정. 조정 후 "견적 실행" 탭에서 재실행.</div></div>';
+    +'<div class="hint">무게기반 계산은 실거래·AI 추정이 모두 불가할 때만 쓰는 최후 보조값입니다.</div></div>';
+  var ac=aiCfg();
+  html+='<div class="card"><h2>AI 추정 설정 (이력 없는 품목 가격 도출)</h2>'
+    +'<div class="grid3">'
+    +'<div><label>유사품 개수</label><input id="aiN" value="'+ac.nComp+'"></div>'
+    +'<div><label>마진계수(1=그대로)</label><input id="aiM" value="'+ac.margin+'"></div>'
+    +'<div><label>재질 엄격매칭</label><select id="aiS"><option value="0"'+(ac.sameMatOnly?"":" selected")+'>아니오(유사재질 허용)</option><option value="1"'+(ac.sameMatOnly?" selected":"")+'>예(동일재질만)</option></select></div>'
+    +'</div>'
+    +'<label style="margin-top:10px">AI 가격정책 지침 (선택 — AI가 추론 시 우선 적용)</label>'
+    +'<textarea id="aiP" rows="3" placeholder="예) 신규 거래처는 10% 높게. 오링은 최소 300원. 대형(외경 200 이상)은 가공비 가산.">'+esc(ac.policy)+'</textarea>'
+    +'<div class="hint">AI는 위 설정 + 회사 실거래 중 가장 가까운 유사품을 근거로 단가를 추론합니다. 각 견적 결과에 "분석에 사용한 유사 실거래"가 함께 표시됩니다.</div></div>';
   var pane=document.getElementById("paneCfg");
   pane.innerHTML=html;
   // 바인딩
@@ -672,6 +690,11 @@ function renderCfg(){
   pane.querySelector("#fc").oninput=function(e){state.cfg.fixedCost=parseFloat(e.target.value)||0;persist();};
   pane.querySelector("#lr").oninput=function(e){state.cfg.lossRate=parseFloat(e.target.value)||0;persist();};
   pane.querySelector("#qf").oninput=function(e){state.cfg.qtyFactor=parseFloat(e.target.value)||1;persist();};
+  function ensureAi(){state.cfg.ai=state.cfg.ai||{nComp:6,sameMatOnly:false,margin:1,policy:""};return state.cfg.ai;}
+  pane.querySelector("#aiN").oninput=function(e){ensureAi().nComp=Math.max(1,Math.min(12,parseInt(e.target.value)||6));persist();};
+  pane.querySelector("#aiM").oninput=function(e){ensureAi().margin=parseFloat(e.target.value)||1;persist();};
+  pane.querySelector("#aiS").onchange=function(e){ensureAi().sameMatOnly=e.target.value==="1";persist();};
+  pane.querySelector("#aiP").oninput=function(e){ensureAi().policy=e.target.value;persist();};
 }
 
 function switchTab(t){

@@ -38,11 +38,12 @@ module.exports = async function handler(req, res) {
       };
     });
 
+    const policy = (body.policy && String(body.policy).trim()) ? ("\n\n[회사 추가 가격정책 — 우선 적용]\n" + String(body.policy).trim()) : "";
     const client = new Anthropic({ apiKey: apiKey });
     const msg = await client.messages.create({
       model: MODEL,
       max_tokens: 2000,
-      system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
+      system: [{ type: "text", text: SYSTEM + policy, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: "다음 품목들의 단가를 유사 실거래 기준으로 추론하세요:\n" + JSON.stringify(payload, null, 0) }],
     });
     const tb = (msg.content || []).find(function (b) { return b.type === "text"; });
