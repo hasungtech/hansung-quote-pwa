@@ -173,12 +173,22 @@ var GUIDE={
 };
 function won(n){return n==null?"—":Math.round(n).toLocaleString("ko-KR");}
 function medOf(a){if(!a||!a.length)return null;var b=a.slice().sort(function(x,y){return x-y;});return b[(b.length-1)>>1];}
+// 수량 구간 단가계수
+function qtyFactor(qty){var t=state.cfg.qtyTiers||[],f=1;for(var i=0;i<t.length;i++){if(qty>=t[i][0])f=t[i][1];}return f;}
+// 최종 단가: 기준가 × 수량계수 × 목표마진, 최소단가 floor
+function finalPrice(base,qty){
+  if(base==null)return null;
+  var c=state.cfg,p=base*(qty?qtyFactor(qty):1)*(c.marginFactor||1);
+  if(c.minPrice&&p<c.minPrice)p=c.minPrice;
+  return Math.round(p);
+}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
 
 // ===== 상태 =====
 var state={
   text:"현대당진 오일씰 TC 50x65x9 NBR 30개\nP50 NBR 100개\nAN374 FKM 20개\nTC 40x62x11 50개",
   cfg:{density:{NBR:1.3,FKM:1.9,EPDM:1.2,SILICON:1.2},unitPrice:{NBR:129,FKM:645,EPDM:154.8,SILICON:258},fixedCost:150,lossRate:0.1,qtyFactor:1,fallbackDensity:1.3,fallbackUnitPrice:129,ai:{nComp:6,sameMatOnly:false,margin:1,policy:""},
+    qtyTiers:[[1,1.15],[10,1],[50,0.92],[200,0.85],[1000,0.78]],marginFactor:1,minPrice:0,
     profiles:{},
     cost:{
       density:{NBR:1.3,FKM:1.9,EPDM:1.2,SILICON:1.2,PU:1.2,PTFE:2.2,NYLON:1.14,PHENOLIC:1.4,HNBR:1.3,POM:1.41,_def:1.3},
@@ -521,9 +531,11 @@ function startDrawingUpload(files){
 function collectQuoteItems(){
   return (state.results||[]).filter(function(r){return r.c.item.confidence==="high";}).map(function(r){
     var it=r.c.item,price=null,basis="";
-    if(r.hist){price=r.hist.rec;basis=r.hist.basis;}
-    else if(r.neighbor){price=r.neighbor.med;basis=r.neighbor.sameMat?"유사실거래":"유사(재질혼합)";}
-    else if(r.cost&&r.cost.ok){price=r.cost.sell;basis="원가추정";}
+    var base0=null;
+    if(r.hist){base0=r.hist.rec;basis=r.hist.basis;}
+    else if(r.neighbor){base0=r.neighbor.med;basis=r.neighbor.sameMat?"유사실거래":"유사(재질혼합)";}
+    else if(r.cost&&r.cost.ok){base0=r.cost.sell;basis="원가추정";}
+    price=finalPrice(base0,it.qty);
     return{raw:it.rawText,category:it.category,type:it.type||"",code:it.sourceCode||"",material:it.material||"",id:it.id,od:it.od,h:it.h,qty:it.qty,unit_price:price,basis:basis};
   }).filter(function(x){return x.unit_price!=null;});
 }
@@ -539,7 +551,7 @@ function saveQuote(btn){
 function quoteRows(){
   return (state.results||[]).map(function(r){
     if(!isPriced(r))return null;
-    var it=r.c.item,unit=r.hist?r.hist.rec:(r.neighbor?r.neighbor.med:(r.cost&&r.cost.ok?r.cost.sell:null));
+    var it=r.c.item,base0=r.hist?r.hist.rec:(r.neighbor?r.neighbor.med:(r.cost&&r.cost.ok?r.cost.sell:null)),unit=finalPrice(base0,it.qty);
     if(unit==null)return null;
     var qty=it.qty||0,dim=(it.id!=null?(it.id+"×"+it.od+(it.h!=null?"×"+it.h:"")):"");
     return{input:it.rawText,cat:it.category,type:it.type||"",code:it.sourceCode||"",dim:dim,mat:it.material||"",qty:qty,basis:r.hist?(r.hist.basis+"이력"):"원가적산",unit:unit,amount:qty?unit*qty:unit};
@@ -581,18 +593,19 @@ function openQuoteForm(){
     +'<div class="grid3"><div><label>견적번호</label><input id="q_no" value="'+esc(Q.lastNo||("Q"+ymd()+"-01"))+'"></div>'
     +'<div><label>유효기간(일)</label><input id="q_valid" value="'+esc(String(Q.valid||30))+'"></div>'
     +'<div><label>부가세</label><select id="q_vat"><option value="1">별도(10%)</option><option value="0">포함/면세</option></select></div></div>'
-    +'<label style="margin-top:8px">비고</label><input id="q_note" value="'+esc(Q.note||"납기 별도 협의")+'">'
+    +'<div class="grid3"><div><label>금형비(별도, 원)</label><input id="q_mold" value="'+esc(String(Q.mold||""))+'" placeholder="신규 금형 시"></div><div style="grid-column:span 2"><label>비고</label><input id="q_note" value="'+esc(Q.note||"납기 별도 협의")+'"></div></div>'
     +'<div class="flx"><button class="run" id="q_pdf" style="flex:1">PDF·인쇄</button><button class="fbtn" id="q_csv">엑셀</button><button class="fbtn" id="q_close">닫기</button></div></div></div>';
   function v(id){var e=document.getElementById(id);return e?e.value.trim():"";}
-  function meta(){var m={company:v("q_co"),bizno:v("q_biz"),tel:v("q_tel"),manager:v("q_mgr"),cust:v("q_cust"),no:v("q_no"),valid:v("q_valid"),vat:v("q_vat")==="1",note:v("q_note")};
-    saveQuoteMeta({company:m.company,bizno:m.bizno,tel:m.tel,manager:m.manager,cust:m.cust,valid:m.valid,note:m.note,lastNo:m.no});return m;}
+  function meta(){var m={company:v("q_co"),bizno:v("q_biz"),tel:v("q_tel"),manager:v("q_mgr"),cust:v("q_cust"),no:v("q_no"),valid:v("q_valid"),vat:v("q_vat")==="1",note:v("q_note"),mold:parseFloat(v("q_mold"))||0};
+    saveQuoteMeta({company:m.company,bizno:m.bizno,tel:m.tel,manager:m.manager,cust:m.cust,valid:m.valid,note:m.note,lastNo:m.no,mold:m.mold});return m;}
   document.getElementById("q_close").onclick=function(){host.innerHTML="";};
   document.getElementById("qbd").onclick=function(e){if(e.target.id==="qbd")host.innerHTML="";};
   document.getElementById("q_pdf").onclick=function(){printQuote(meta(),rows);};
   document.getElementById("q_csv").onclick=function(){exportQuoteCSV(meta(),rows);};
 }
 function printQuote(m,rows){
-  var supply=rows.reduce(function(s,r){return s+(r.amount||0);},0);
+  var mold=m.mold||0;
+  var supply=rows.reduce(function(s,r){return s+(r.amount||0);},0)+mold;
   var vat=m.vat?Math.round(supply*0.1):0,total=supply+vat;
   var w=window.open("","_blank");if(!w){showInfo("PDF","팝업이 차단되었습니다. 팝업 허용 후 다시 시도하세요.");return;}
   var tb='';rows.forEach(function(r,i){tb+='<tr><td class=c>'+(i+1)+'</td><td>'+esc(r.input)+'</td><td>'+esc(r.dim)+'</td><td class=c>'+esc(r.mat)+'</td><td class=r>'+(r.qty||"")+'</td><td class=r>'+won(r.unit)+'</td><td class=r>'+won(r.amount)+'</td></tr>';});
@@ -600,7 +613,7 @@ function printQuote(m,rows){
     +'<tr><th>공급자</th><td>'+esc(m.company||"한성테크")+'</td><th>사업자번호</th><td>'+esc(m.bizno||"")+'</td></tr>'
     +'<tr><th>연락처</th><td>'+esc(m.tel||"")+'</td><th>담당자</th><td>'+esc(m.manager||"")+'</td></tr>'
     +'<tr><th>유효기간</th><td colspan=3>견적일로부터 '+esc(m.valid||"30")+'일</td></tr></table>';
-  var totals='<table class=sum><tr><th>공급가액</th><td class=r>'+won(supply)+'원</td></tr><tr><th>부가세'+(m.vat?'(10%)':'(면세/포함)')+'</th><td class=r>'+won(vat)+'원</td></tr><tr class=tt><th>합계금액</th><td class=r>'+won(total)+'원</td></tr></table>';
+  var totals='<table class=sum>'+(mold?'<tr><th>금형비(별도)</th><td class=r>'+won(mold)+'원</td></tr>':'')+'<tr><th>공급가액'+(mold?'(금형 포함)':'')+'</th><td class=r>'+won(supply)+'원</td></tr><tr><th>부가세'+(m.vat?'(10%)':'(면세/포함)')+'</th><td class=r>'+won(vat)+'원</td></tr><tr class=tt><th>합계금액</th><td class=r>'+won(total)+'원</td></tr></table>';
   var doc='<!DOCTYPE html><html lang=ko><head><meta charset=utf-8><title>견적서 '+esc(m.no)+'</title><style>'
     +'body{font-family:-apple-system,"Malgun Gothic",sans-serif;padding:28px;color:#111;font-size:12px}h1{font-size:26px;letter-spacing:14px;text-align:center;margin:0 0 14px}'
     +'.cust{font-size:15px;font-weight:700;margin:6px 0 14px}table{width:100%;border-collapse:collapse;margin-bottom:14px}'
@@ -615,7 +628,7 @@ function printQuote(m,rows){
   w.document.write(doc);w.document.close();
 }
 function exportQuoteCSV(m,rows){
-  var supply=rows.reduce(function(s,r){return s+(r.amount||0);},0),vat=m.vat?Math.round(supply*0.1):0,total=supply+vat;
+  var mold=m.mold||0,supply=rows.reduce(function(s,r){return s+(r.amount||0);},0)+mold,vat=m.vat?Math.round(supply*0.1):0,total=supply+vat;
   var L=[];
   L.push(["견적서"].map(csvCell).join(","));
   L.push(["공급자",m.company||"한성테크","견적번호",m.no].map(csvCell).join(","));
@@ -624,6 +637,7 @@ function exportQuoteCSV(m,rows){
   L.push(["No","품목","규격","재질","수량","단가","금액"].join(","));
   rows.forEach(function(r,i){L.push([i+1,r.input,r.dim,r.mat,r.qty,r.unit,r.amount].map(csvCell).join(","));});
   L.push([]);
+  if(mold)L.push(["","","","","","금형비(별도)",mold].map(csvCell).join(","));
   L.push(["","","","","","공급가액",supply].map(csvCell).join(","));
   L.push(["","","","","","부가세",vat].map(csvCell).join(","));
   L.push(["","","","","","합계금액",total].map(csvCell).join(","));
@@ -741,10 +755,14 @@ function renderRun(){
       // ===== 가격: 실거래(정확) → 유사 실거래 중앙값(동일재질) → 원가추정(최후) =====
       var C=r.cost,H=r.hist,N=r.neighbor,itMat=(r.c.item.material||"").toUpperCase();
       var nb=N?N.items:[], nMed=N?N.med:null, sameMat=N&&N.sameMat;
-      var headline=H?H.rec:(nMed!=null?nMed:(C&&C.ok?C.sell:null));
+      var base=H?H.rec:(nMed!=null?nMed:(C&&C.ok?C.sell:null));
       var hsrc=H?"실거래가":(nMed!=null?"유사 실거래 중앙값":"원가추정");
-      if(headline!=null)
+      var qy=r.c.item.qty||0, headline=finalPrice(base,qy), qf=qy?qtyFactor(qy):1, mf=state.cfg.marginFactor||1;
+      if(headline!=null){
         html+='<div class="price"><span style="font-size:12px;color:var(--muted)">추천가(개당) · '+hsrc+(H?(' '+esc(H.date)):'')+'</span><b>'+won(headline)+'원</b></div>';
+        var adj=[];if(qy&&qf!==1)adj.push('수량 '+qy+'개 ×'+qf);if(mf!==1)adj.push('마진 ×'+mf);if(state.cfg.minPrice&&base*qf*mf<state.cfg.minPrice)adj.push('최소단가 적용');
+        if(adj.length)html+='<div class="mut" style="font-size:11px">기준 '+won(base)+'원 · '+adj.join(' · ')+'</div>';
+      }
       if(H){
         html+='<div style="margin-top:8px"><b>실거래 이력</b> <span class="mut" style="font-size:11px">['+esc(keyDesc(H.key))+']</span>'
           +'<div class="mut" style="font-size:12px">'+H.basis+' '+H.n+'건 · 범위 '+won(H.min)+'~'+won(H.max)+'원'+(H.vol?' <span class="lo">⚠편차큼</span>':'')+'</div>';
@@ -815,6 +833,14 @@ function renderCfg(){
     +'<label style="margin-top:10px">AI 가격정책 지침 (선택 — AI가 추론 시 우선 적용)</label>'
     +'<textarea id="aiP" rows="3" placeholder="예) 신규 거래처는 10% 높게. 오링은 최소 300원. 대형(외경 200 이상)은 가공비 가산.">'+esc(ac.policy)+'</textarea>'
     +'<div class="hint">AI는 위 설정 + 회사 실거래 중 가장 가까운 유사품을 근거로 단가를 추론합니다. 각 견적 결과에 "분석에 사용한 유사 실거래"가 함께 표시됩니다.</div></div>';
+  var qt=state.cfg.qtyTiers||(state.cfg.qtyTiers=[[1,1.15],[10,1],[50,0.92],[200,0.85],[1000,0.78]]);
+  html+='<div class="card"><h2>수량·마진 정책</h2>'
+    +'<div class="grid3"><div><label>목표마진계수(1=그대로)</label><input class="ck" data-p="marginFactor" value="'+(state.cfg.marginFactor!=null?state.cfg.marginFactor:1)+'"></div>'
+    +'<div><label>최소단가(원, 0=없음)</label><input class="ck" data-p="minPrice" value="'+(state.cfg.minPrice||0)+'"></div></div>'
+    +'<label style="margin-top:8px">수량 구간 단가계수 (이상 수량 → ×계수)</label>'
+    +'<div class="matrow" style="grid-template-columns:1fr 1fr;font-size:11px;color:var(--muted)"><span>최소수량(개)</span><span>단가계수(×)</span></div>';
+  qt.forEach(function(t,i){html+='<div class="matrow" style="grid-template-columns:1fr 1fr"><input class="ck" data-p="qtyTiers.'+i+'.0" value="'+t[0]+'"><input class="ck" data-p="qtyTiers.'+i+'.1" value="'+t[1]+'"></div>';});
+  html+='<div class="hint">예: 1개~ ×1.15(소량 할증), 1000개~ ×0.78(대량 할인). 추천가는 기준가×수량계수×마진, 최소단가 미만이면 최소단가 적용.</div></div>';
   var pf=state.cfg.profiles||(state.cfg.profiles={});
   html+='<div class="card"><h2>단면 프로파일 (형상 기반 · 단가표보다 우선)</h2>'
     +'<div class="hint" style="margin-top:0">우리 제품의 실제 단면을 등록하면 코드명과 무관하게 형상 기준으로 계산됩니다. <b>충전율</b>(단면이 외접사각을 채우는 비율 0~1)·<b>재료 원/g</b>·<b>가공·고정비</b>를 넣으면 그 타입은 이 식으로 계산: 가격 = 가공비 + (충전율 × 반경두께 × 높이 × π × 평균지름) × 비중 × 원/g. <b>충전율을 비우면</b> 아래 단가표를 사용합니다.</div>'
@@ -883,7 +909,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v4";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v5";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
