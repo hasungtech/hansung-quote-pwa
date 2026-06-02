@@ -178,6 +178,7 @@ function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;
 var state={
   text:"현대당진 오일씰 TC 50x65x9 NBR 30개\nP50 NBR 100개\nAN374 FKM 20개\nTC 40x62x11 50개",
   cfg:{density:{NBR:1.3,FKM:1.9,EPDM:1.2,SILICON:1.2},unitPrice:{NBR:129,FKM:645,EPDM:154.8,SILICON:258},fixedCost:150,lossRate:0.1,qtyFactor:1,fallbackDensity:1.3,fallbackUnitPrice:129,ai:{nComp:6,sameMatOnly:false,margin:1,policy:""},
+    profiles:{},
     cost:{
       density:{NBR:1.3,FKM:1.9,EPDM:1.2,SILICON:1.2,PU:1.2,PTFE:2.2,NYLON:1.14,PHENOLIC:1.4,HNBR:1.3,POM:1.41,_def:1.3},
       // 거래내역(2024~)으로 적합한 단가표: 카테고리→재질→[고정비, 원/g]
@@ -289,6 +290,23 @@ function histMatch(it){
   return null;
 }
 // 원가 적산(공정별) — 클라이언트 계산, 어떤 제품이든 치수+재질이면 항상 산출
+// 단면(프로파일) 기반 원가: 타입/제품군에 충전율+원/g 등록 시 형상 기준 계산(단가표보다 우선)
+function profileCost(item){
+  var P=state.cfg.profiles;if(!P)return null;
+  var id=item.id,od=item.od;if(id==null||od==null)return null;
+  var key=(item.type&&P[item.type]&&P[item.type].fill>0)?item.type:((item.category&&P[item.category]&&P[item.category].fill>0)?item.category:null);
+  if(!key)return null;
+  var pr=P[key],h=item.h,mat=(item.material||"").toUpperCase();
+  if(!mat)return null;
+  var den=state.cfg.cost.density[mat]||state.cfg.cost.density._def;
+  var Dm=(id+od)/2,wr=(od-id)/2,hh=h||wr;if(!(wr>0))return{ok:false};
+  var area=pr.fill*wr*hh,V=area*Math.PI*Dm,w=V*den/1000;
+  var matG=pr.matG||0,proc=pr.proc||0,sell=Math.round(w*matG+proc);
+  var wstr=(w<10?w.toFixed(2):Math.round(w))+"g";
+  return{ok:true,sell:sell,weight:w,area:area,
+    breakdown:[{k:"가공·고정비",v:Math.round(proc)},{k:"재료비("+mat+" 단면"+Math.round(area)+"mm² → "+wstr+" × "+matG+"원/g)",v:Math.round(w*matG)}],
+    category:"단면프로파일:"+key,fallback:false};
+}
 function costEstimate(item){
   var c=state.cfg.cost;if(!c||!c.fit)return null;
   var id=item.id,od=item.od,h=item.h,mat=(item.material||"").toUpperCase(),cat=item.category,PI=Math.PI;
@@ -311,7 +329,7 @@ function processItem(raw){
   var hist=null,cost=null,comps=[];
   // 치수+재질만 있으면 제품군·코드·수량 미상이어도 무조건 가격 산출(신제품·미분류 포함)
   var priceable=c.item.id!=null&&c.item.od!=null&&!!c.item.material;
-  if(priceable){hist=histMatch(c.item);cost=costEstimate(c.item);comps=findComparables(c.item);}
+  if(priceable){hist=histMatch(c.item);cost=profileCost(c.item)||costEstimate(c.item);comps=findComparables(c.item);}
   return{raw:raw,lookup:lookup,c:c,hist:hist,cost:cost,comps:comps};
 }
 function isPriced(r){return !!(r.hist||(r.cost&&r.cost.ok));}
@@ -720,6 +738,18 @@ function renderCfg(){
     +'<label style="margin-top:10px">AI 가격정책 지침 (선택 — AI가 추론 시 우선 적용)</label>'
     +'<textarea id="aiP" rows="3" placeholder="예) 신규 거래처는 10% 높게. 오링은 최소 300원. 대형(외경 200 이상)은 가공비 가산.">'+esc(ac.policy)+'</textarea>'
     +'<div class="hint">AI는 위 설정 + 회사 실거래 중 가장 가까운 유사품을 근거로 단가를 추론합니다. 각 견적 결과에 "분석에 사용한 유사 실거래"가 함께 표시됩니다.</div></div>';
+  var pf=state.cfg.profiles||(state.cfg.profiles={});
+  html+='<div class="card"><h2>단면 프로파일 (형상 기반 · 단가표보다 우선)</h2>'
+    +'<div class="hint" style="margin-top:0">우리 제품의 실제 단면을 등록하면 코드명과 무관하게 형상 기준으로 계산됩니다. <b>충전율</b>(단면이 외접사각을 채우는 비율 0~1)·<b>재료 원/g</b>·<b>가공·고정비</b>를 넣으면 그 타입은 이 식으로 계산: 가격 = 가공비 + (충전율 × 반경두께 × 높이 × π × 평균지름) × 비중 × 원/g. <b>충전율을 비우면</b> 아래 단가표를 사용합니다.</div>'
+    +'<div class="matrow" style="grid-template-columns:90px 1fr 1fr 1fr;font-size:11px;color:var(--muted)"><span>적용대상</span><span>충전율</span><span>원/g</span><span>가공·고정비</span></div>';
+  ["TC","SC","TCN","TCV","SB","TB","VC","OIL SEAL","U-PACKING","DUST SEAL","WEAR RING"].forEach(function(k){
+    var p=pf[k]||{};
+    html+='<div class="matrow" style="grid-template-columns:90px 1fr 1fr 1fr"><span style="font-size:12px">'+k+'</span>'
+      +'<input class="ck" data-p="profiles.'+k+'.fill" value="'+(p.fill!=null?p.fill:"")+'" placeholder="0~1">'
+      +'<input class="ck" data-p="profiles.'+k+'.matG" value="'+(p.matG!=null?p.matG:"")+'" placeholder="원/g">'
+      +'<input class="ck" data-p="profiles.'+k+'.proc" value="'+(p.proc!=null?p.proc:"")+'" placeholder="원"></div>';
+  });
+  html+='<div class="hint" style="margin-top:6px">예: 우리 TC 단면을 측정해 충전율 0.4·NBR 25원/g·가공 2000원 식으로. 외부 타사 제품은 도면을 받아 처리하세요.</div></div>';
   var ct=state.cfg.cost;
   html+='<div class="card"><h2>거래내역 단가표 (고정비 + 원/g)</h2>'
     +'<div class="hint" style="margin-top:0">회사 거래내역(2024~)으로 산출한 단가표입니다. 가격 = 고정비 + 무게(g) × 원/g. 실제 단가로 조정하면 즉시 반영·저장됩니다.</div>';
