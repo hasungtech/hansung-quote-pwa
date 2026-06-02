@@ -222,7 +222,7 @@ function buildHistIndex(){
     if(key.indexOf("D:")!==0)continue;
     var body=key.slice(2),ci=body.indexOf(":"),type=body.slice(0,ci),dims=body.slice(ci+1).split("x").map(parseFloat);
     if(dims.length<2||isNaN(dims[0])||isNaN(dims[1]))continue;
-    (HIST_IDX.byType[type]=HIST_IDX.byType[type]||[]).push({id:dims[0],od:dims[1],h:(dims.length>2&&!isNaN(dims[2]))?dims[2]:null,mat:mat,price:s[0][1],n:v[1]});
+    (HIST_IDX.byType[type]=HIST_IDX.byType[type]||[]).push({id:dims[0],od:dims[1],h:(dims.length>2&&!isNaN(dims[2]))?dims[2]:null,mat:mat,price:s[0][1],n:v[1],date:s[0][0],cust:s[0][2]||"",qty:s[0][3]||0});
   }
 }
 function aiCfg(){var a=(state.cfg&&state.cfg.ai)||{};return{nComp:a.nComp||6,sameMatOnly:!!a.sameMatOnly,margin:a.margin||1,policy:a.policy||""};}
@@ -237,7 +237,7 @@ function findComparables(it){
     if(mat&&p.mat&&p.mat!==mat)d+=80;
     return{p:p,d:d};
   }).sort(function(a,b){return a.d-b.d;}).slice(0,cfg.nComp).map(function(o){
-    return{dim:nm(o.p.id)+"×"+nm(o.p.od)+(o.p.h!=null?"×"+nm(o.p.h):""),mat:o.p.mat,price:o.p.price,n:o.p.n};
+    return{dim:nm(o.p.id)+"×"+nm(o.p.od)+(o.p.h!=null?"×"+nm(o.p.h):""),mat:o.p.mat,price:o.p.price,n:o.p.n,cust:o.p.cust,qty:o.p.qty,date:o.p.date};
   });
 }
 function runAIPricing(){
@@ -750,8 +750,8 @@ function renderRun(){
         if(H.samples&&H.samples.length){html+='<div class="mut" style="font-size:11px;margin-top:4px">최근 판매이력</div><table style="margin-top:2px"><thead><tr><th>날짜</th><th>거래처</th><th class="r" style="text-align:right">수량</th><th class="r" style="text-align:right">단가</th></tr></thead><tbody>';H.samples.forEach(function(s){html+='<tr><td class="mut">'+esc(s[0])+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td></tr>';});html+='</tbody></table>';}
         html+='</div>';
       }else if(comps.length){
-        html+='<div style="margin-top:8px"><b>유사 실거래 (교차검증)</b><table style="margin-top:2px"><thead><tr><th>규격</th><th>재질</th><th style="text-align:right">단가</th></tr></thead><tbody>';
-        comps.slice(0,5).forEach(function(c){html+='<tr><td class="mono">'+esc(c.dim)+'</td><td>'+esc(c.mat||"-")+'</td><td style="text-align:right">'+won(c.price)+'원</td></tr>';});
+        html+='<div style="margin-top:8px"><b>유사 실거래 (교차검증)</b><table style="margin-top:2px"><thead><tr><th>규격</th><th>재질</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead><tbody>';
+        comps.slice(0,5).forEach(function(c){html+='<tr><td class="mono">'+esc(c.dim)+'</td><td>'+esc(c.mat||"-")+'</td><td class="mut">'+esc(c.cust||"-")+'</td><td style="text-align:right">'+(c.qty||"")+'개</td><td style="text-align:right;font-weight:600">'+won(c.price)+'원</td></tr>';});
         html+='</tbody></table></div>';
       }
       html+='</div></div>';
