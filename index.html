@@ -69,7 +69,8 @@
 "use strict";
 // ===== A: 자연어 인식 =====
 var TYPE_PREFIXES=["TCN","TCV","TC","SC","SB","TB","VF","VH","DSI","SKY","VA","VS"];
-var MAT={NBR:"NBR",FKM:"FKM",VITON:"FKM","바이톤":"FKM",EPDM:"EPDM",SILICON:"SILICON","실리콘":"SILICON"};
+// 재질 인식(긴/구체 키워드를 앞에 둬 부분일치 오인 방지). 미등록 재질명도 인식되면 기본단가로 가격 산출.
+var MAT={HNBR:"HNBR",FFKM:"FFKM","칼레즈":"FFKM",VITON:"FKM","바이톤":"FKM",FKM:"FKM",EPDM:"EPDM",SILICONE:"SILICON",SILICON:"SILICON","실리콘":"SILICON","폴리우레탄":"PU","우레탄":"PU","유레탄":"PU",URETHANE:"PU",POLYURETHANE:"PU",PTFE:"PTFE","테프론":"PTFE",TEFLON:"PTFE",POM:"POM","네오프렌":"CR",NEOPRENE:"CR",AFLAS:"AFLAS","아프라스":"AFLAS",NBR:"NBR","니트릴":"NBR"};
 function parseLine(line){
   var raw=line.trim(); if(!raw)return null;
   var u=raw.toUpperCase().replace(/[×*]/g,"x").replace(/,(\d)/g,".$1");
@@ -128,15 +129,21 @@ var DEFAULT_SHAPES={
 };
 function runVolume(formula,d){try{var fn=new Function("id","od","h","PI",formula);var v=fn(d.id,d.od,d.h,Math.PI);return(typeof v==="number"&&isFinite(v)&&v>0)?v:null;}catch(e){return null;}}
 function estimate(item,cfg,shapes){
-  var sh=shapes[item.category];if(!sh)return{ok:false,reason:"NO_SHAPE"};
-  for(var i=0;i<sh.needs.length;i++)if(item[sh.needs[i]]==null)return{ok:false,reason:"MISSING_DIMS"};
-  var vol=runVolume(sh.formula,item);if(vol==null)return{ok:false,reason:"INVALID_DIMS"};
+  var sh=shapes[item.category],shapeFallback=false;
+  // 제품군 공식이 없거나 그 공식에 필요한 치수가 부족하면 → 가진 치수로 기본 형상 자동 대체(무조건 가격 산출)
+  if(!(sh&&sh.needs.every(function(n){return item[n]!=null;}))){
+    if(item.id!=null&&item.od!=null&&item.h!=null)sh={formula:"return PI*h*(Math.pow(od/2,2)-Math.pow(id/2,2));",needs:["id","od","h"]};
+    else if(item.id!=null&&item.od!=null)sh={formula:"cs=(od-id)/2;r=cs/2;R=id/2+r;return 2*PI*PI*R*r*r;",needs:["id","od"]};
+    else return{ok:false,reason:"MISSING_DIMS"};
+    shapeFallback=true;
+  }
+  var vol=runVolume(sh.formula,item);if(vol==null||!(vol>0))return{ok:false,reason:"INVALID_DIMS"};
   var m=(item.material||"").toUpperCase();
   if(!m)return{ok:false,reason:"NO_MATERIAL"};
-  if(cfg.density[m]==null||cfg.unitPrice[m]==null)return{ok:false,reason:"UNKNOWN_MATERIAL",material:m};
-  var den=cfg.density[m],up=cfg.unitPrice[m];
+  var den=cfg.density[m],up=cfg.unitPrice[m],matFallback=false;
+  if(den==null||up==null){den=cfg.fallbackDensity;up=cfg.fallbackUnitPrice;matFallback=true;} // 미등록 재질도 기본단가로 계산
   var weightG=vol*(den/1000),materialCost=weightG*up,subtotal=cfg.fixedCost+materialCost;
-  return{ok:true,volumeMm3:vol,weightG:weightG,densityCm3:den,unitPriceGram:up,materialCost:materialCost,fixedCost:cfg.fixedCost,subtotal:subtotal,lossRate:cfg.lossRate,unitPrice:subtotal*(1+cfg.lossRate)*cfg.qtyFactor};
+  return{ok:true,volumeMm3:vol,weightG:weightG,densityCm3:den,unitPriceGram:up,materialCost:materialCost,fixedCost:cfg.fixedCost,subtotal:subtotal,lossRate:cfg.lossRate,unitPrice:subtotal*(1+cfg.lossRate)*cfg.qtyFactor,matFallback:matFallback,shapeFallback:shapeFallback};
 }
 var SAMPLE_HISTORY=[
   {code:"TC21024015",type:"TC",oringCode:"",digits:"21024015",winRate:27.3,customers:2,avgWonPrice:7400,avgQuotePrice:8200},
@@ -224,14 +231,18 @@ function processItem(raw){
   var lookup=lookupCode(raw.sourceCode);
   var c=classify(raw,lookup);
   var matches=[],est=null,hist=null;
-  if(c.item.confidence==="high"){hist=histMatch(c.item);est=estimate(c.item,state.cfg,state.shapes);}
+  // 치수+재질만 있으면 제품군·코드·수량 미상이어도 무조건 가격 산출(신제품·미분류 포함)
+  var priceable=c.item.id!=null&&c.item.od!=null&&!!c.item.material;
+  if(priceable){hist=histMatch(c.item);est=estimate(c.item,state.cfg,state.shapes);}
   return{raw:raw,lookup:lookup,c:c,matches:matches,est:est,hist:hist};
 }
+function isPriced(r){return !!(r.hist||(r.est&&r.est.ok));}
 function runPipeline(){state.results=parseText(state.text).map(processItem);}
 
 // ===== 빠진 정보 입력 창(모달) =====
 var MAT_OPTS=["NBR","FKM","EPDM","SILICON"];
-function missingResults(){return(state.results||[]).map(function(r,i){return{r:r,i:i};}).filter(function(o){return o.r.c.reasons.length>0;});}
+// 가격이 안 나온(보완 필요) 품목만 — 가격이 나온 건 분류·수량 미상이어도 보완 안내에서 제외
+function missingResults(){return(state.results||[]).map(function(r,i){return{r:r,i:i};}).filter(function(o){return o.r.c.reasons.length>0&&!isPriced(o.r);});}
 function closeFixModal(){var h=document.getElementById("modalHost");if(h)h.innerHTML="";}
 function openFixModal(){
   var need=missingResults();if(need.length===0)return;
@@ -486,7 +497,7 @@ function renderRun(){
   if(state.results){
     if(state.results.length===0)html+='<div class="card mut">'+(state.text.trim()?'인식된 품목이 없습니다. 타입·치수·코드·재질·수량을 확인해 주세요.':'문의 내용을 입력해 주세요.')+'</div>';
     // 입력이 필요한(정보 누락) 품목 요약 안내
-    var need=state.results.filter(function(r){return r.c.reasons.length>0;});
+    var need=state.results.filter(function(r){return r.c.reasons.length>0&&!isPriced(r);});
     if(need.length>0){
       html+='<div class="card" style="border-color:var(--accent);background:#fdf3f3">'
         +'<h2 style="color:var(--accent)">⚠ 입력이 필요한 정보가 있습니다 ('+need.length+'건)</h2>'
@@ -520,13 +531,17 @@ function renderRun(){
       html+='<div class="row"><b>판정</b> · <b class="'+(r.c.item.confidence==="high"?"hi":"lo")+'">'+(r.c.item.confidence==="high"?"HIGH":"LOW")+'</b>';
       r.c.reasons.forEach(function(rs){html+='<span class="badge">'+(RL[rs]||rs)+'</span>';});
       html+='</div>';
-      if(r.c.item.confidence==="low"){
-        html+='<div style="padding:8px 10px;background:#fdf3f3;border-radius:3px;color:var(--accent);font-size:12.5px">→ 확인 대기함 — 아래 정보를 입력해 주세요'
+      var priced=isPriced(r);
+      if(r.c.reasons.length>0){
+        var bg=priced?"var(--soft)":"#fdf3f3",col=priced?"var(--muted)":"var(--accent)";
+        html+='<div style="padding:8px 10px;background:'+bg+';border-radius:3px;color:'+col+';font-size:12.5px">'
+          +(priced?'참고 · 아래 정보를 보완하면 더 정확합니다(가격은 아래에 산출됨)':'→ 견적을 내려면 아래 정보가 필요합니다')
           +'<ul style="margin:6px 0 0;padding-left:18px;line-height:1.6">';
         r.c.reasons.forEach(function(rs){html+='<li>'+esc(GUIDE[rs]||RL[rs]||rs)+'</li>';});
         if(r.c.candidates)html+='<li>후보 '+r.c.candidates.length+'개 중 하나를 선택해 주세요.</li>';
         html+='</ul></div>';
-      }else if(r.hist){
+      }
+      if(r.hist){
         var H=r.hist;
         var matAgnostic=(H.key.indexOf("|")<0)&&!!r.raw.material;
         html+='<b>최근 거래가</b>'
@@ -545,13 +560,15 @@ function renderRun(){
       }else if(r.est){
         if(r.est.ok){
           html+='<b>신규 견적(무게 기반)</b>'
-            +'<div style="font-size:12px;color:var(--accent);margin-top:4px">근거 · <b>실거래 이력 없음</b> → 무게 기반 계산(설정값 사용)</div>'
+            +'<div style="font-size:12px;color:var(--accent);margin-top:4px">근거 · <b>실거래 이력 없음</b> → 무게 기반 계산'
+            +(r.est.shapeFallback?' <span class="lo">(제품군 미상 — 기본 형상 '+(r.raw.h!=null?'원통링':'도넛')+'으로 근사)</span>':'')+'</div>'
+            +(r.est.matFallback?'<div class="lo" style="font-size:11px">※ 미등록 재질 '+esc(r.raw.material||"")+' — 기본 비중·단가 적용(설정 탭에서 정확값 추가 권장)</div>':'')
             +'<div style="font-size:12px;color:var(--muted);margin-top:2px;line-height:1.7">'
             +'부피 '+won(r.est.volumeMm3)+'mm³ → 무게 '+r.est.weightG.toFixed(2)+'g(비중 '+r.est.densityCm3+') → 재료비 '+won(r.est.materialCost)+'원(단가 '+r.est.unitPriceGram+'원/g) + 고정비 '+won(r.est.fixedCost)+'원 → ×'+(1+r.est.lossRate).toFixed(2)+'(로스율)</div>'
             +'<div class="price"><span style="font-size:12px;color:var(--muted)">기준 견적가(개당)</span><b>'+won(r.est.unitPrice)+'원</b></div>';
         }else{
-          var em=r.est.reason==="NO_SHAPE"?"이 제품군 부피공식 미정(설정 탭에서 추가)":r.est.reason==="MISSING_DIMS"?"필수 치수 누락":r.est.reason==="NO_MATERIAL"?"재질 미상 — 재질 확인 필요(단가 결정 불가)":r.est.reason==="UNKNOWN_MATERIAL"?("미등록 재질 "+(r.est.material||"")+" — 설정 탭에 비중·단가 추가 필요"):"치수 오류";
-          html+='<div class="lo" style="font-size:12.5px">견적 불가: '+em+'</div>';
+          var em=r.est.reason==="MISSING_DIMS"?"치수(특히 높이) 입력 필요":"치수 값 오류(내경<외경 확인)";
+          html+='<div class="lo" style="font-size:12.5px">견적 산출 불가: '+em+'</div>';
         }
       }
       html+='</div></div>';
