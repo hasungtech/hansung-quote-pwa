@@ -207,7 +207,10 @@ function histKeys(it){
 function histMatch(it){
   if(!PRICE_HISTORY)return null;
   var ks=histKeys(it);
-  for(var i=0;i<ks.length;i++){var v=PRICE_HISTORY[ks[i]];if(v){return{key:ks[i],wonMed:v[0],wonN:v[1],wonMin:v[2],wonMax:v[3],quoMed:v[4],quoN:v[5],rec:v[0]>0?v[0]:v[4],basis:v[0]>0?"실거래":"견적"};}}
+  for(var i=0;i<ks.length;i++){var v=PRICE_HISTORY[ks[i]];if(v){
+    var s=v[5]||[];if(!s.length)continue;
+    return{key:ks[i],basis:v[0]===0?"실판매":"견적",n:v[1],min:v[2],max:v[3],vol:v[4]===1,samples:s,rec:s[0][1],date:s[0][0]};
+  }}
   return null;
 }
 function processItem(raw){
@@ -518,12 +521,16 @@ function renderRun(){
         html+='</ul></div>';
       }else if(r.hist){
         var H=r.hist;
-        html+='<b>실거래 이력 추천가</b><div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.7">'
-          +(H.wonN?('실판매 '+H.wonN+'건 · 범위 '+won(H.wonMin)+'~'+won(H.wonMax)+'원'):'실판매 이력 없음')
-          +(H.quoN?(' · 견적 '+H.quoN+'건(중앙값 '+won(H.quoMed)+'원)'):'')
-          +'</div>'
-          +'<div class="price"><span style="font-size:12px;color:var(--muted)">추천가(개당) · '+H.basis+' 중앙값</span><b>'+won(H.rec)+'원</b></div>'
-          +(r.est&&r.est.ok?'<div class="mut" style="font-size:11px;margin-top:4px">참고: 무게기반 추정 '+won(r.est.unitPrice)+'원</div>':'');
+        html+='<b>최근 거래가</b>'
+          +'<div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.7">'+H.basis+' '+H.n+'건 · 범위 '+won(H.min)+'~'+won(H.max)+'원</div>'
+          +'<div class="price"><span style="font-size:12px;color:var(--muted)">최근거래가(개당) · '+esc(H.date)+'</span><b>'+won(H.rec)+'원</b></div>';
+        if(H.vol)html+='<div style="margin-top:6px;padding:8px 10px;background:#fdf3f3;border-radius:3px;color:var(--accent);font-size:12.5px">⚠ 가격 편차가 큽니다 — 아래 최근 거래를 확인하고 결정하세요</div>';
+        if(H.samples&&H.samples.length){
+          html+='<div style="margin-top:6px"><div class="mut" style="font-size:11px">최근 거래내역</div><table style="margin-top:2px"><tbody>';
+          H.samples.forEach(function(s){html+='<tr><td class="mut">'+esc(s[0])+'</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td></tr>';});
+          html+='</tbody></table></div>';
+        }
+        html+=(r.est&&r.est.ok?'<div class="mut" style="font-size:11px;margin-top:4px">참고: 무게기반 추정 '+won(r.est.unitPrice)+'원</div>':'');
       }else if(r.est){
         if(r.est.ok){
           html+='<b>신규 견적(무게 기반)</b><div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.7">'
