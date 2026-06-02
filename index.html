@@ -172,6 +172,7 @@ var GUIDE={
   QTY_MISSING:"수량을 입력해 주세요. 예) 30개"
 };
 function won(n){return n==null?"—":Math.round(n).toLocaleString("ko-KR");}
+function medOf(a){if(!a||!a.length)return null;var b=a.slice().sort(function(x,y){return x-y;});return b[(b.length-1)>>1];}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
 
 // ===== 상태 =====
@@ -326,13 +327,16 @@ function costEstimate(item){
 function processItem(raw){
   var lookup=lookupCode(raw.sourceCode);
   var c=classify(raw,lookup);
-  var hist=null,cost=null,comps=[];
+  var hist=null,cost=null,comps=[],neighbor=null;
   // 치수+재질만 있으면 제품군·코드·수량 미상이어도 무조건 가격 산출(신제품·미분류 포함)
   var priceable=c.item.id!=null&&c.item.od!=null&&!!c.item.material;
-  if(priceable){hist=histMatch(c.item);cost=profileCost(c.item)||costEstimate(c.item);comps=findComparables(c.item);}
-  return{raw:raw,lookup:lookup,c:c,hist:hist,cost:cost,comps:comps};
+  if(priceable){
+    hist=histMatch(c.item);cost=profileCost(c.item)||costEstimate(c.item);comps=findComparables(c.item);
+    if(!hist&&comps.length){var im=(c.item.material||"").toUpperCase();var sm=comps.filter(function(x){return (x.mat||"").toUpperCase()===im;});var nb=sm.length>=2?sm:comps;neighbor={med:medOf(nb.map(function(x){return x.price;})),sameMat:sm.length>=2,n:nb.length,items:nb.slice(0,8),mat:im};}
+  }
+  return{raw:raw,lookup:lookup,c:c,hist:hist,cost:cost,comps:comps,neighbor:neighbor};
 }
-function isPriced(r){return !!(r.hist||(r.cost&&r.cost.ok));}
+function isPriced(r){return !!(r.hist||r.neighbor||(r.cost&&r.cost.ok));}
 function runPipeline(){state.results=parseText(state.text).map(processItem);}
 
 // ===== 빠진 정보 입력 창(모달) =====
@@ -518,7 +522,8 @@ function collectQuoteItems(){
   return (state.results||[]).filter(function(r){return r.c.item.confidence==="high";}).map(function(r){
     var it=r.c.item,price=null,basis="";
     if(r.hist){price=r.hist.rec;basis=r.hist.basis;}
-    else if(r.cost&&r.cost.ok){price=r.cost.sell;basis="원가적산";}
+    else if(r.neighbor){price=r.neighbor.med;basis=r.neighbor.sameMat?"유사실거래":"유사(재질혼합)";}
+    else if(r.cost&&r.cost.ok){price=r.cost.sell;basis="원가추정";}
     return{raw:it.rawText,category:it.category,type:it.type||"",code:it.sourceCode||"",material:it.material||"",id:it.id,od:it.od,h:it.h,qty:it.qty,unit_price:price,basis:basis};
   }).filter(function(x){return x.unit_price!=null;});
 }
@@ -534,7 +539,7 @@ function saveQuote(btn){
 function quoteRows(){
   return (state.results||[]).map(function(r){
     if(!isPriced(r))return null;
-    var it=r.c.item,unit=r.hist?r.hist.rec:(r.cost&&r.cost.ok?r.cost.sell:null);
+    var it=r.c.item,unit=r.hist?r.hist.rec:(r.neighbor?r.neighbor.med:(r.cost&&r.cost.ok?r.cost.sell:null));
     if(unit==null)return null;
     var qty=it.qty||0,dim=(it.id!=null?(it.id+"×"+it.od+(it.h!=null?"×"+it.h:"")):"");
     return{input:it.rawText,cat:it.category,type:it.type||"",code:it.sourceCode||"",dim:dim,mat:it.material||"",qty:qty,basis:r.hist?(r.hist.basis+"이력"):"원가적산",unit:unit,amount:qty?unit*qty:unit};
@@ -733,26 +738,29 @@ function renderRun(){
         if(r.c.candidates)html+='<li>후보 '+r.c.candidates.length+'개 중 하나를 선택해 주세요.</li>';
         html+='</ul></div>';
       }
-      // ===== 가격 (원가 적산 중심) =====
-      var C=r.cost,H=r.hist,comps=r.comps||[];
-      var headline=H?H.rec:(C&&C.ok?C.sell:null), hsrc=H?"실거래가":"원가적산";
+      // ===== 가격: 실거래(정확) → 유사 실거래 중앙값(동일재질) → 원가추정(최후) =====
+      var C=r.cost,H=r.hist,N=r.neighbor,itMat=(r.c.item.material||"").toUpperCase();
+      var nb=N?N.items:[], nMed=N?N.med:null, sameMat=N&&N.sameMat;
+      var headline=H?H.rec:(nMed!=null?nMed:(C&&C.ok?C.sell:null));
+      var hsrc=H?"실거래가":(nMed!=null?"유사 실거래 중앙값":"원가추정");
       if(headline!=null)
         html+='<div class="price"><span style="font-size:12px;color:var(--muted)">추천가(개당) · '+hsrc+(H?(' '+esc(H.date)):'')+'</span><b>'+won(headline)+'원</b></div>';
-      if(C&&C.ok){
-        html+='<div style="margin-top:8px"><b>원가 산출</b> <span class="mut" style="font-size:11px">[단가표: '+esc(C.category)+']</span><table style="margin-top:2px"><tbody>';
-        C.breakdown.forEach(function(x){html+='<tr><td class="mut">'+esc(x.k)+'</td><td style="text-align:right">'+won(x.v)+'원</td></tr>';});
-        html+='<tr><td>견적단가(개당)</td><td style="text-align:right;font-weight:700">'+won(C.sell)+'원</td></tr>'
-          +'</tbody></table><div class="hint" style="margin-top:2px">단가표(고정비 + 원/g)는 회사 거래내역으로 산출. 설정 탭 "거래내역 단가표"에서 조정.</div></div>';
-      }
       if(H){
         html+='<div style="margin-top:8px"><b>실거래 이력</b> <span class="mut" style="font-size:11px">['+esc(keyDesc(H.key))+']</span>'
           +'<div class="mut" style="font-size:12px">'+H.basis+' '+H.n+'건 · 범위 '+won(H.min)+'~'+won(H.max)+'원'+(H.vol?' <span class="lo">⚠편차큼</span>':'')+'</div>';
         if(H.samples&&H.samples.length){html+='<div class="mut" style="font-size:11px;margin-top:4px">판매이력 (전체 '+H.n+'건 중 최근 '+H.samples.length+'건)</div><div style="max-height:220px;overflow:auto"><table style="margin-top:2px"><thead><tr><th>날짜</th><th>품목코드</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead><tbody>';H.samples.forEach(function(s){html+='<tr><td class="mut">'+esc(s[0])+'</td><td class="mono">'+esc(s[4]||"-")+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td></tr>';});html+='</tbody></table></div>';}
         html+='</div>';
-      }else if(comps.length){
-        html+='<div style="margin-top:8px"><b>유사 실거래 (교차검증)</b><table style="margin-top:2px"><thead><tr><th>품목코드</th><th>규격</th><th>재질</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead><tbody>';
-        comps.slice(0,8).forEach(function(c){html+='<tr><td class="mono">'+esc(c.code||"-")+'</td><td class="mono">'+esc(c.dim)+'</td><td>'+esc(c.mat||"-")+'</td><td class="mut">'+esc(c.cust||"-")+'</td><td style="text-align:right">'+(c.qty||"")+'개</td><td style="text-align:right;font-weight:600">'+won(c.price)+'원</td></tr>';});
-        html+='</tbody></table></div>';
+      }else if(nb.length){
+        html+='<div style="margin-top:8px"><b>유사 실거래</b> <span class="mut" style="font-size:11px">['+(sameMat?'동일재질 '+itMat+' '+N.n+'건 중앙값':'재질 혼합 — 동일재질 이력 부족')+']</span>'
+          +'<table style="margin-top:2px"><thead><tr><th>품목코드</th><th>규격</th><th>재질</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead><tbody>';
+        nb.slice(0,8).forEach(function(c){html+='<tr><td class="mono">'+esc(c.code||"-")+'</td><td class="mono">'+esc(c.dim)+'</td><td>'+esc(c.mat||"-")+'</td><td class="mut">'+esc(c.cust||"-")+'</td><td style="text-align:right">'+(c.qty||"")+'개</td><td style="text-align:right;font-weight:600">'+won(c.price)+'원</td></tr>';});
+        html+='</tbody></table><div class="hint" style="margin-top:2px">정확 일치 이력이 없어 같은 재질·가까운 치수 실거래의 중앙값으로 추천.</div></div>';
+      }else if(C&&C.ok){
+        html+='<div style="margin-top:8px"><b>원가추정(무게기반)</b> <span class="mut" style="font-size:11px">[유사 실거래 없음]</span>'
+          +'<table style="margin-top:2px"><tbody>';
+        C.breakdown.forEach(function(x){html+='<tr><td class="mut">'+esc(x.k)+'</td><td style="text-align:right">'+won(x.v)+'원</td></tr>';});
+        html+='<tr><td>추정단가(개당)</td><td style="text-align:right;font-weight:700">'+won(C.sell)+'원</td></tr></tbody></table>'
+          +'<div class="hint" style="margin-top:2px">유사 실거래가 없어 단가표(설정 탭)로 추정. 실제와 차이날 수 있음.</div></div>';
       }
       html+='</div></div>';
     });
@@ -869,7 +877,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v3";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v4";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
