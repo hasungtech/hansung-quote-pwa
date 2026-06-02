@@ -561,6 +561,69 @@ function exportPDF(){
   w.document.write(doc);w.document.close();
 }
 function histFetch(qs){return fetch("/api/quotes"+(qs||"")).then(function(r){return r.text().then(function(t){var j;try{j=JSON.parse(t);}catch(e){j={error:"서버 오류(HTTP "+r.status+")"};}return{ok:r.ok,j:j};});});}
+// ===== 정식 견적서(공급자·거래처·견적번호·VAT) =====
+function loadQuoteMeta(){try{return JSON.parse(localStorage.getItem("hsq_quote")||"{}")||{};}catch(e){return {};}}
+function saveQuoteMeta(m){try{localStorage.setItem("hsq_quote",JSON.stringify(m));}catch(e){}}
+function openQuoteForm(){
+  var rows=quoteRows();if(!rows.length){showInfo("견적서","가격이 산출된 품목이 없습니다.");return;}
+  var Q=loadQuoteMeta(),host=document.getElementById("modalHost");
+  host.innerHTML='<div class="modal-bd" id="qbd"><div class="modal"><h2>견적서 작성</h2>'
+    +'<label>공급자(회사명)</label><input id="q_co" value="'+esc(Q.company||"한성테크")+'">'
+    +'<div class="grid3"><div><label>사업자번호</label><input id="q_biz" value="'+esc(Q.bizno||"")+'"></div>'
+    +'<div><label>연락처</label><input id="q_tel" value="'+esc(Q.tel||"")+'"></div>'
+    +'<div><label>담당자</label><input id="q_mgr" value="'+esc(Q.manager||"")+'"></div></div>'
+    +'<label style="margin-top:8px">거래처(받는 곳)</label><input id="q_cust" placeholder="○○ 주식회사 귀하" value="'+esc(Q.cust||"")+'">'
+    +'<div class="grid3"><div><label>견적번호</label><input id="q_no" value="'+esc(Q.lastNo||("Q"+ymd()+"-01"))+'"></div>'
+    +'<div><label>유효기간(일)</label><input id="q_valid" value="'+esc(String(Q.valid||30))+'"></div>'
+    +'<div><label>부가세</label><select id="q_vat"><option value="1">별도(10%)</option><option value="0">포함/면세</option></select></div></div>'
+    +'<label style="margin-top:8px">비고</label><input id="q_note" value="'+esc(Q.note||"납기 별도 협의")+'">'
+    +'<div class="flx"><button class="run" id="q_pdf" style="flex:1">PDF·인쇄</button><button class="fbtn" id="q_csv">엑셀</button><button class="fbtn" id="q_close">닫기</button></div></div></div>';
+  function v(id){var e=document.getElementById(id);return e?e.value.trim():"";}
+  function meta(){var m={company:v("q_co"),bizno:v("q_biz"),tel:v("q_tel"),manager:v("q_mgr"),cust:v("q_cust"),no:v("q_no"),valid:v("q_valid"),vat:v("q_vat")==="1",note:v("q_note")};
+    saveQuoteMeta({company:m.company,bizno:m.bizno,tel:m.tel,manager:m.manager,cust:m.cust,valid:m.valid,note:m.note,lastNo:m.no});return m;}
+  document.getElementById("q_close").onclick=function(){host.innerHTML="";};
+  document.getElementById("qbd").onclick=function(e){if(e.target.id==="qbd")host.innerHTML="";};
+  document.getElementById("q_pdf").onclick=function(){printQuote(meta(),rows);};
+  document.getElementById("q_csv").onclick=function(){exportQuoteCSV(meta(),rows);};
+}
+function printQuote(m,rows){
+  var supply=rows.reduce(function(s,r){return s+(r.amount||0);},0);
+  var vat=m.vat?Math.round(supply*0.1):0,total=supply+vat;
+  var w=window.open("","_blank");if(!w){showInfo("PDF","팝업이 차단되었습니다. 팝업 허용 후 다시 시도하세요.");return;}
+  var tb='';rows.forEach(function(r,i){tb+='<tr><td class=c>'+(i+1)+'</td><td>'+esc(r.input)+'</td><td>'+esc(r.dim)+'</td><td class=c>'+esc(r.mat)+'</td><td class=r>'+(r.qty||"")+'</td><td class=r>'+won(r.unit)+'</td><td class=r>'+won(r.amount)+'</td></tr>';});
+  var sup='<table class=info><tr><th>견적번호</th><td>'+esc(m.no)+'</td><th>작성일</th><td>'+new Date().toLocaleDateString("ko-KR")+'</td></tr>'
+    +'<tr><th>공급자</th><td>'+esc(m.company||"한성테크")+'</td><th>사업자번호</th><td>'+esc(m.bizno||"")+'</td></tr>'
+    +'<tr><th>연락처</th><td>'+esc(m.tel||"")+'</td><th>담당자</th><td>'+esc(m.manager||"")+'</td></tr>'
+    +'<tr><th>유효기간</th><td colspan=3>견적일로부터 '+esc(m.valid||"30")+'일</td></tr></table>';
+  var totals='<table class=sum><tr><th>공급가액</th><td class=r>'+won(supply)+'원</td></tr><tr><th>부가세'+(m.vat?'(10%)':'(면세/포함)')+'</th><td class=r>'+won(vat)+'원</td></tr><tr class=tt><th>합계금액</th><td class=r>'+won(total)+'원</td></tr></table>';
+  var doc='<!DOCTYPE html><html lang=ko><head><meta charset=utf-8><title>견적서 '+esc(m.no)+'</title><style>'
+    +'body{font-family:-apple-system,"Malgun Gothic",sans-serif;padding:28px;color:#111;font-size:12px}h1{font-size:26px;letter-spacing:14px;text-align:center;margin:0 0 14px}'
+    +'.cust{font-size:15px;font-weight:700;margin:6px 0 14px}table{width:100%;border-collapse:collapse;margin-bottom:14px}'
+    +'.info th,.info td{border:1px solid #bbb;padding:5px 8px;text-align:left}.info th{background:#f3f3f3;width:90px;white-space:nowrap}'
+    +'.items th,.items td{border:1px solid #bbb;padding:6px 8px}.items th{background:#eee}.r{text-align:right}.c{text-align:center}'
+    +'.sum{width:46%;margin-left:auto}.sum th,.sum td{border:1px solid #bbb;padding:6px 8px}.sum th{background:#f3f3f3;text-align:left}.tt th,.tt td{font-weight:700;font-size:14px;background:#fafafa}'
+    +'.note{color:#666;font-size:11px;margin-top:8px}@media print{body{padding:0}}</style></head><body>'
+    +'<h1>견 적 서</h1><div class=cust>'+(m.cust?esc(m.cust):"")+'</div>'+sup
+    +'<table class=items><thead><tr><th class=c>No</th><th>품목(입력)</th><th>규격</th><th class=c>재질</th><th class=r>수량</th><th class=r>단가</th><th class=r>금액</th></tr></thead><tbody>'+tb+'</tbody></table>'
+    +totals+'<div class=note>비고: '+esc(m.note||"")+'</div><div class=note>※ 가격은 실거래 이력/원가 기준 산출값이며 협의에 따라 변동될 수 있습니다.</div>'
+    +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},250);}</scr'+'ipt></body></html>';
+  w.document.write(doc);w.document.close();
+}
+function exportQuoteCSV(m,rows){
+  var supply=rows.reduce(function(s,r){return s+(r.amount||0);},0),vat=m.vat?Math.round(supply*0.1):0,total=supply+vat;
+  var L=[];
+  L.push(["견적서"].map(csvCell).join(","));
+  L.push(["공급자",m.company||"한성테크","견적번호",m.no].map(csvCell).join(","));
+  L.push(["거래처",m.cust||"","작성일",new Date().toLocaleDateString("ko-KR")].map(csvCell).join(","));
+  L.push([]);
+  L.push(["No","품목","규격","재질","수량","단가","금액"].join(","));
+  rows.forEach(function(r,i){L.push([i+1,r.input,r.dim,r.mat,r.qty,r.unit,r.amount].map(csvCell).join(","));});
+  L.push([]);
+  L.push(["","","","","","공급가액",supply].map(csvCell).join(","));
+  L.push(["","","","","","부가세",vat].map(csvCell).join(","));
+  L.push(["","","","","","합계금액",total].map(csvCell).join(","));
+  dl(new Blob(["﻿"+L.join("\r\n")],{type:"text/csv;charset=utf-8"}),"견적서_"+ymd()+".csv");
+}
 function openHistory(){
   var host=document.getElementById("modalHost");if(!host)return;
   host.innerHTML='<div class="modal-bd" id="hbd"><div class="modal"><h2>저장 이력</h2>'
@@ -643,7 +706,7 @@ function renderRun(){
         +'<div class="flx" style="margin-top:8px">'
         +'<button class="fbtn" id="histBtn" style="flex:1">저장 이력</button>'
         +'<button class="fbtn" id="csvBtn" style="flex:1">엑셀</button>'
-        +'<button class="fbtn" id="pdfBtn" style="flex:1">PDF</button></div></div>';
+        +'<button class="fbtn" id="pdfBtn" style="flex:1">견적서</button></div></div>';
     }
     state.results.forEach(function(r){
       html+='<div class="res"><div class="in"><b>입력:</b> <span class="mut">'+esc(r.raw.rawText)+'</span></div><div class="bd">';
@@ -708,7 +771,7 @@ function renderRun(){
   var svb=document.getElementById("saveBtn");if(svb)svb.onclick=function(){saveQuote(this);};
   var hsb=document.getElementById("histBtn");if(hsb)hsb.onclick=openHistory;
   var cvb=document.getElementById("csvBtn");if(cvb)cvb.onclick=exportCSV;
-  var pvb=document.getElementById("pdfBtn");if(pvb)pvb.onclick=exportPDF;
+  var pvb=document.getElementById("pdfBtn");if(pvb)pvb.onclick=openQuoteForm;
 }
 
 function renderCfg(){
