@@ -748,7 +748,13 @@ function renderRun(){
       if(H){
         html+='<div style="margin-top:8px"><b>실거래 이력</b> <span class="mut" style="font-size:11px">['+esc(keyDesc(H.key))+']</span>'
           +'<div class="mut" style="font-size:12px">'+H.basis+' '+H.n+'건 · 범위 '+won(H.min)+'~'+won(H.max)+'원'+(H.vol?' <span class="lo">⚠편차큼</span>':'')+'</div>';
-        if(H.samples&&H.samples.length){html+='<div class="mut" style="font-size:11px;margin-top:4px">판매이력 (전체 '+H.n+'건 중 최근 '+H.samples.length+'건)</div><div style="max-height:220px;overflow:auto"><table style="margin-top:2px"><thead><tr><th>날짜</th><th>품목코드</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead><tbody>';H.samples.forEach(function(s){html+='<tr><td class="mut">'+esc(s[0])+'</td><td class="mono">'+esc(s[4]||"-")+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td></tr>';});html+='</tbody></table></div>';}
+        if(H.samples&&H.samples.length){
+          var sHdr='<thead><tr><th>날짜</th><th>품목코드</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead>';
+          var rowS=function(s){return '<tr><td class="mut">'+esc(s[0])+'</td><td class="mono">'+esc(s[4]||"-")+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td></tr>';};
+          html+='<div class="mut" style="font-size:11px;margin-top:4px">판매이력 (전체 '+H.n+'건 중 '+H.samples.length+'건)</div>'
+            +'<table style="margin-top:2px">'+sHdr+'<tbody>'+H.samples.slice(0,5).map(rowS).join("")+'</tbody></table>';
+          if(H.samples.length>5)html+='<details style="margin-top:4px"><summary style="cursor:pointer;color:var(--accent);font-size:12.5px;font-weight:700">더보기 (+'+(H.samples.length-5)+'건)</summary><table style="margin-top:2px">'+sHdr+'<tbody>'+H.samples.slice(5).map(rowS).join("")+'</tbody></table></details>';
+        }
         html+='</div>';
       }else if(nb.length){
         html+='<div style="margin-top:8px"><b>유사 실거래</b> <span class="mut" style="font-size:11px">['+(sameMat?'동일재질 '+itMat+' '+N.n+'건 중앙값':'재질 혼합 — 동일재질 이력 부족')+']</span>'
