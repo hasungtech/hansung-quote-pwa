@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>견적 거래성사 판정 플로우 · 한성테크</title>
+<style>
+  :root{--accent:#c92020;--ink:#141414;--line:#e2e2e2;--muted:#6b6b6b;--soft:#f7f7f7;--green:#1a7f37;--amber:#b8860b;--gray:#9a9a9a}
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Malgun Gothic','맑은 고딕','Apple SD Gothic Neo',sans-serif;color:var(--ink);background:#ececed;margin:0;padding:24px;line-height:1.5}
+  .sheet{max-width:880px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 6px 30px rgba(0,0,0,.12)}
+  .top{background:linear-gradient(135deg,#c92020,#8c1414);color:#fff;padding:26px 30px}
+  .top .kicker{font-size:12px;letter-spacing:3px;opacity:.85;font-weight:700}
+  .top h1{font-size:25px;margin:6px 0 4px;font-weight:800;letter-spacing:-.5px}
+  .top p{font-size:13px;margin:0;opacity:.9}
+  .body{padding:26px 30px 30px}
+  .idea{display:flex;gap:14px;align-items:flex-start;background:var(--soft);border-left:4px solid var(--accent);border-radius:8px;padding:16px 18px;margin-bottom:26px}
+  .idea .ic{font-size:26px;line-height:1}
+  .idea b{color:var(--accent)}
+  .idea .t{font-size:13.5px}
+  .sectit{font-size:12px;font-weight:800;letter-spacing:1px;color:var(--accent);margin:0 0 14px;text-transform:uppercase}
+  /* steps */
+  .step{display:flex;gap:16px;position:relative;padding-bottom:10px}
+  .rail{display:flex;flex-direction:column;align-items:center;flex:0 0 38px}
+  .num{width:38px;height:38px;border-radius:50%;background:var(--ink);color:#fff;font-weight:800;font-size:16px;display:flex;align-items:center;justify-content:center;z-index:2}
+  .num.q{background:var(--accent)}
+  .line{flex:1;width:2px;background:var(--line);margin:4px 0}
+  .card{flex:1;border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:18px}
+  .card h3{margin:0 0 6px;font-size:15px}
+  .card h3 .em{margin-right:6px}
+  .card p{margin:0;font-size:13px;color:#333}
+  .card .ex{margin-top:8px;font-size:12px;color:var(--muted);background:var(--soft);border-radius:6px;padding:8px 10px;font-family:ui-monospace,Menlo,Consolas,monospace}
+  /* decision */
+  .branch{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px}
+  .out{border-radius:9px;padding:12px;text-align:center;border:1.5px solid}
+  .out .big{font-size:15px;font-weight:800;margin-bottom:3px}
+  .out .d{font-size:11.5px;line-height:1.45}
+  .ok{border-color:var(--green);background:#f0f8f2}.ok .big{color:var(--green)}
+  .wait{border-color:var(--amber);background:#fbf6ea}.wait .big{color:var(--amber)}
+  .no{border-color:var(--gray);background:#f6f6f6}.no .big{color:var(--gray)}
+  /* pseudocode */
+  .code{background:#1c1c1e;color:#eaeaea;border-radius:10px;padding:16px 18px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.7;margin:6px 0 26px;overflow:auto}
+  .code .k{color:#ff7b72}.code .s{color:#7ee787}.code .c{color:#8b949e}
+  /* stats */
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:26px}
+  .stat{border:1px solid var(--line);border-radius:10px;padding:16px;text-align:center}
+  .stat .v{font-size:26px;font-weight:800;color:var(--accent)}
+  .stat .v.g{color:var(--green)}.stat .v.m{color:var(--gray)}
+  .stat .l{font-size:12px;color:var(--muted);margin-top:2px}
+  /* limits */
+  .limit{background:#fdf3f3;border:1px solid #f3d4d4;border-radius:10px;padding:14px 18px}
+  .limit b{color:var(--accent)}
+  .limit ul{margin:8px 0 0;padding-left:18px;font-size:12.5px;color:#444;line-height:1.7}
+  .foot{text-align:center;font-size:11px;color:var(--muted);margin-top:18px}
+  @media print{body{background:#fff;padding:0}.sheet{box-shadow:none;border-radius:0;max-width:100%}}
+  @media (max-width:560px){.branch,.stats{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="top">
+    <div class="kicker">한성테크 견적 시스템</div>
+    <h1>견적 → 거래성사 판정 플로우</h1>
+    <p>이 견적이 실제 거래(출고)로 이어졌는지 자동으로 추정하는 방법</p>
+  </div>
+
+  <div class="body">
+    <div class="idea">
+      <div class="ic">💡</div>
+      <div class="t">거래내역에는 <b>견적 행</b>과 <b>출고 행</b>이 따로 있을 뿐, 둘을 잇는 번호가 없습니다.
+      그래서 이렇게 추정합니다 —<br><b>“견적을 낸 뒤, 같은 거래처에 같은 품목코드가 실제로 출고됐다면 → 그 견적은 성사된 것.”</b></div>
+    </div>
+
+    <p class="sectit">▎판정 4단계</p>
+
+    <div class="step">
+      <div class="rail"><div class="num">1</div><div class="line"></div></div>
+      <div class="card">
+        <h3><span class="em">📦</span>출고 기록을 색인으로 모은다</h3>
+        <p>거래내역 전체에서 <b>‘출고’</b> 행만 골라 <b>(거래처 + 품목코드)</b>별로 출고 날짜 목록을 만든다. 공백·하이픈·대소문자 차이는 무시하고 맞춘다.</p>
+        <div class="ex">(우일정공, P50) → [2025-03-12, 2025-08-01, 2026-01-20 …]</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="rail"><div class="num">2</div><div class="line"></div></div>
+      <div class="card">
+        <h3><span class="em">🔎</span>견적마다 그 색인을 조회한다</h3>
+        <p>견적 한 건(거래처·코드·견적일)에 대해, 같은 (거래처+코드)의 출고 날짜 목록을 찾는다.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="rail"><div class="num q">3</div><div class="line"></div></div>
+      <div class="card">
+        <h3><span class="em">⚖️</span>기간을 따져 결과를 가른다</h3>
+        <p><b>견적일 −7일 ~ +365일</b> 사이에 출고가 하나라도 있으면 성사. 없으면, 너무 최근이라 판단이 이른 견적인지 한 번 더 본다.</p>
+        <div class="branch">
+          <div class="out ok"><div class="big">✅ 성사</div><div class="d">1년 내 같은 거래처·코드 출고 있음</div></div>
+          <div class="out wait"><div class="big">⏳ 대기</div><div class="d">판단할 후속 판매데이터가 아직 부족한 최근 견적</div></div>
+          <div class="out no"><div class="big">✗ 미성사</div><div class="d">충분한 기간이 지났지만 매칭 출고 없음</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="rail"><div class="num">4</div></div>
+      <div class="card">
+        <h3><span class="em">🖥️</span>견적이력 표에 표시한다</h3>
+        <p>각 견적에 결과 표시(✅/⏳/✗)를 달고, 견적이력 제목 옆에 <b>‘성사 N / 미성사 N’</b> 요약을 보여준다.</p>
+      </div>
+    </div>
+
+    <p class="sectit">▎로직 한눈에</p>
+    <div class="code">
+<span class="k">성사판정</span>(거래처, 코드, 견적일):<br>
+&nbsp;&nbsp;출고날짜들 = 출고색인[(거래처, 코드)]<br>
+&nbsp;&nbsp;<span class="k">if</span> 출고날짜들 중 (견적일<span class="s">-7일</span> ~ 견적일<span class="s">+365일</span>)에 하나라도 있음:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">return</span> ✅ 성사<br>
+&nbsp;&nbsp;<span class="k">if</span> (데이터최신일 - 견적일) &le; 60일:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">return</span> ⏳ 대기&nbsp;&nbsp;<span class="c"># 판단 보류</span><br>
+&nbsp;&nbsp;<span class="k">return</span> ✗ 미성사
+    </div>
+
+    <p class="sectit">▎이 데이터에서의 결과</p>
+    <div class="stats">
+      <div class="stat"><div class="v">21,838</div><div class="l">전체 견적 건수</div></div>
+      <div class="stat"><div class="v g">8,630</div><div class="l">성사 (39.5%)</div></div>
+      <div class="stat"><div class="v m">0</div><div class="l">대기 — 견적이 출고보다<br>먼저 끝나 해당 없음</div></div>
+    </div>
+
+    <div class="limit">
+      <b>⚠ 알아둘 한계 (직접 연결이 아닌 추정)</b>
+      <ul>
+        <li>같은 거래처·코드를 별개 건으로 또 사간 경우도 ‘성사’로 잡힐 수 있음</li>
+        <li>견적 땐 <code>P50</code>, 출고 땐 <code>HRP50JK</code>처럼 코드가 바뀌면 매칭 실패 → 미성사로 보일 수 있음</li>
+        <li>‘1년 · 60일 · 거래처 일치’ 기준은 조정 가능 — 회사 실무에 맞게 바꿀 수 있음</li>
+      </ul>
+    </div>
+
+    <div class="foot">한성테크 견적 PWA · 견적 거래성사 판정 로직</div>
+  </div>
+</div>
+</body>
+</html>
