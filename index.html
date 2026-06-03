@@ -59,7 +59,7 @@
   <div class="tabs"><div class="tab on" id="tabRun">견적 실행</div><div class="tab" id="tabCfg">공식·설정값</div></div>
   <div id="paneRun"></div>
   <div id="paneCfg" style="display:none"></div>
-  <div class="hint" style="margin-top:16px">텍스트·도면(사진·PDF, Claude 비전) 인식 → 실거래·견적 이력 약 26만건(2024~) 기반 추천가. 이력 없으면 무게기반 추정. 비중·단가·부피공식은 설정 탭에서 조정.</div>
+  <div class="hint" style="margin-top:16px">텍스트·도면(사진·PDF, Claude 비전) 인식 → 판매·매입·견적 이력 약 26만건(2024~) 기반 추천가. 매칭되면 판매/매입/견적 이력을 모두 표시. 이력 없으면 무게기반 추정. 비중·단가·부피공식은 설정 탭에서 조정.</div>
 </div>
 <button id="installBtn" class="install">홈 화면에 설치</button>
 <div id="modalHost"></div>
@@ -228,7 +228,7 @@ function loadPriceHistory(){
 function buildHistIndex(){
   HIST_IDX={byType:{}};
   for(var k in PRICE_HISTORY){
-    var v=PRICE_HISTORY[k],s=v[5];if(!s||!s.length)continue;
+    var v=PRICE_HISTORY[k],s=(v[5]&&v[5].length)?v[5]:(v[7]||[]);if(!s.length)continue; // 출고 우선, 없으면 견적
     var mat="",key=k,bar=k.indexOf("|");if(bar>=0){mat=k.slice(bar+1);key=k.slice(0,bar);}
     if(key.indexOf("D:")!==0)continue;
     var body=key.slice(2),ci=body.indexOf(":"),type=body.slice(0,ci),dims=body.slice(ci+1).split("x").map(parseFloat);
@@ -293,12 +293,18 @@ function keyDesc(key){ // 매칭키 → 사람이 읽는 근거 설명
 }
 function histMatch(it){
   if(!PRICE_HISTORY)return null;
-  var ks=histKeys(it);
-  for(var i=0;i<ks.length;i++){var v=PRICE_HISTORY[ks[i]];if(v){
-    var s=v[5]||[];if(!s.length)continue;
-    return{key:ks[i],basis:v[0]===0?"실판매":"견적",n:v[1],min:v[2],max:v[3],vol:v[4]===1,samples:s,rec:s[0][1],date:s[0][0]};
-  }}
-  return null;
+  var ks=histKeys(it),fallback=null;
+  for(var i=0;i<ks.length;i++){var v=PRICE_HISTORY[ks[i]];if(!v)continue;
+    var sales=v[5]||[],buy=v[6]||[],quo=v[7]||[];
+    var ps=sales.length?sales:quo; // 가격 산정 스트림: 출고 우선, 없으면 견적
+    var hasPrice=ps.length>0;
+    var rs={key:ks[i],basis:v[0]===0?"실판매":"견적",n:v[1],min:v[2],max:v[3],vol:v[4]===1,
+      samples:sales,buySamples:buy,quoSamples:quo,
+      rec:hasPrice?ps[0][1]:null,date:hasPrice?ps[0][0]:"",hasPrice:hasPrice};
+    if(hasPrice)return rs; // 가격 있는 키 우선 반환
+    if(buy.length&&!fallback)fallback=rs; // 매입만 있으면 일단 보류(가격 키 없을 때만 사용)
+  }
+  return fallback; // 가격 키가 전혀 없으면 매입이력만이라도 표시
 }
 // 원가 적산(공정별) — 클라이언트 계산, 어떤 제품이든 치수+재질이면 항상 산출
 // 단면(프로파일) 기반 원가: 타입/제품군에 충전율+원/g 등록 시 형상 기준 계산(단가표보다 우선)
@@ -342,11 +348,11 @@ function processItem(raw){
   var priceable=c.item.id!=null&&c.item.od!=null&&!!c.item.material;
   if(priceable){
     hist=histMatch(c.item);cost=profileCost(c.item)||costEstimate(c.item);comps=findComparables(c.item);
-    if(!hist&&comps.length){var im=(c.item.material||"").toUpperCase();var sm=comps.filter(function(x){return (x.mat||"").toUpperCase()===im;});var nb=sm.length>=2?sm:comps;neighbor={med:medOf(nb.map(function(x){return x.price;})),sameMat:sm.length>=2,n:nb.length,items:nb.slice(0,8),mat:im};}
+    if((!hist||!hist.hasPrice)&&comps.length){var im=(c.item.material||"").toUpperCase();var sm=comps.filter(function(x){return (x.mat||"").toUpperCase()===im;});var nb=sm.length>=2?sm:comps;neighbor={med:medOf(nb.map(function(x){return x.price;})),sameMat:sm.length>=2,n:nb.length,items:nb.slice(0,8),mat:im};}
   }
   return{raw:raw,lookup:lookup,c:c,hist:hist,cost:cost,comps:comps,neighbor:neighbor};
 }
-function isPriced(r){return !!(r.hist||r.neighbor||(r.cost&&r.cost.ok));}
+function isPriced(r){return !!((r.hist&&r.hist.hasPrice)||r.neighbor||(r.cost&&r.cost.ok));}
 function runPipeline(){state.results=parseText(state.text).map(processItem);}
 
 // ===== 빠진 정보 입력 창(모달) =====
@@ -532,7 +538,7 @@ function collectQuoteItems(){
   return (state.results||[]).filter(function(r){return r.c.item.confidence==="high";}).map(function(r){
     var it=r.c.item,price=null,basis="";
     var base0=null;
-    if(r.hist){base0=r.hist.rec;basis=r.hist.basis;}
+    if(r.hist&&r.hist.hasPrice){base0=r.hist.rec;basis=r.hist.basis;}
     else if(r.neighbor){base0=r.neighbor.med;basis=r.neighbor.sameMat?"유사실거래":"유사(재질혼합)";}
     else if(r.cost&&r.cost.ok){base0=r.cost.sell;basis="원가추정";}
     price=finalPrice(base0,it.qty);
@@ -551,10 +557,11 @@ function saveQuote(btn){
 function quoteRows(){
   return (state.results||[]).map(function(r){
     if(!isPriced(r))return null;
-    var it=r.c.item,base0=r.hist?r.hist.rec:(r.neighbor?r.neighbor.med:(r.cost&&r.cost.ok?r.cost.sell:null)),unit=finalPrice(base0,it.qty);
+    var hp=r.hist&&r.hist.hasPrice;
+    var it=r.c.item,base0=hp?r.hist.rec:(r.neighbor?r.neighbor.med:(r.cost&&r.cost.ok?r.cost.sell:null)),unit=finalPrice(base0,it.qty);
     if(unit==null)return null;
     var qty=it.qty||0,dim=(it.id!=null?(it.id+"×"+it.od+(it.h!=null?"×"+it.h:"")):"");
-    return{input:it.rawText,cat:it.category,type:it.type||"",code:it.sourceCode||"",dim:dim,mat:it.material||"",qty:qty,basis:r.hist?(r.hist.basis+"이력"):"원가적산",unit:unit,amount:qty?unit*qty:unit};
+    return{input:it.rawText,cat:it.category,type:it.type||"",code:it.sourceCode||"",dim:dim,mat:it.material||"",qty:qty,basis:hp?(r.hist.basis+"이력"):"원가적산",unit:unit,amount:qty?unit*qty:unit};
   }).filter(function(x){return x;});
 }
 function ymd(){var d=new Date();return d.getFullYear()+("0"+(d.getMonth()+1)).slice(-2)+("0"+d.getDate()).slice(-2);}
@@ -755,36 +762,49 @@ function renderRun(){
       // ===== 가격: 실거래(정확) → 유사 실거래 중앙값(동일재질) → 원가추정(최후) =====
       var C=r.cost,H=r.hist,N=r.neighbor,itMat=(r.c.item.material||"").toUpperCase();
       var nb=N?N.items:[], nMed=N?N.med:null, sameMat=N&&N.sameMat;
-      var base=H?H.rec:(nMed!=null?nMed:(C&&C.ok?C.sell:null));
-      var hsrc=H?"실거래가":(nMed!=null?"유사 실거래 중앙값":"원가추정");
+      var hp=H&&H.hasPrice;
+      var base=hp?H.rec:(nMed!=null?nMed:(C&&C.ok?C.sell:null));
+      var hsrc=hp?(H.basis+"가"):(nMed!=null?"유사 실거래 중앙값":"원가추정");
       var qy=r.c.item.qty||0, headline=finalPrice(base,qy), qf=qy?qtyFactor(qy):1, mf=state.cfg.marginFactor||1;
       if(headline!=null){
-        html+='<div class="price"><span style="font-size:12px;color:var(--muted)">추천가(개당) · '+hsrc+(H?(' '+esc(H.date)):'')+'</span><b>'+won(headline)+'원</b></div>';
+        html+='<div class="price"><span style="font-size:12px;color:var(--muted)">추천가(개당) · '+hsrc+(hp?(' '+esc(H.date)):'')+'</span><b>'+won(headline)+'원</b></div>';
         var adj=[];if(qy&&qf!==1)adj.push('수량 '+qy+'개 ×'+qf);if(mf!==1)adj.push('마진 ×'+mf);if(state.cfg.minPrice&&base*qf*mf<state.cfg.minPrice)adj.push('최소단가 적용');
         if(adj.length)html+='<div class="mut" style="font-size:11px">기준 '+won(base)+'원 · '+adj.join(' · ')+'</div>';
       }
-      if(H){
-        html+='<div style="margin-top:8px"><b>실거래 이력</b> <span class="mut" style="font-size:11px">['+esc(keyDesc(H.key))+']</span>'
-          +'<div class="mut" style="font-size:12px">'+H.basis+' '+H.n+'건 · 범위 '+won(H.min)+'~'+won(H.max)+'원'+(H.vol?' <span class="lo">⚠편차큼</span>':'')+'</div>';
-        if(H.samples&&H.samples.length){
-          var sHdr='<thead><tr><th>날짜</th><th>품목코드</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead>';
-          var rowS=function(s){return '<tr><td class="mut">'+esc(s[0])+'</td><td class="mono">'+esc(s[4]||"-")+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td></tr>';};
-          html+='<div class="mut" style="font-size:11px;margin-top:4px">판매이력 (전체 '+H.n+'건 중 '+H.samples.length+'건)</div>'
-            +'<table style="margin-top:2px">'+sHdr+'<tbody>'+H.samples.slice(0,5).map(rowS).join("")+'</tbody></table>';
-          if(H.samples.length>5)html+='<details style="margin-top:4px"><summary style="cursor:pointer;color:var(--accent);font-size:12.5px;font-weight:700">더보기 (+'+(H.samples.length-5)+'건)</summary><table style="margin-top:2px">'+sHdr+'<tbody>'+H.samples.slice(5).map(rowS).join("")+'</tbody></table></details>';
+      // 가격 산정 근거(정확 일치 단가가 없을 때만): 유사 실거래 → 원가추정
+      if(!hp){
+        if(nb.length){
+          html+='<div style="margin-top:8px"><b>유사 실거래</b> <span class="mut" style="font-size:11px">['+(sameMat?'동일재질 '+itMat+' '+N.n+'건 중앙값':'재질 혼합 — 동일재질 이력 부족')+']</span>'
+            +'<table style="margin-top:2px"><thead><tr><th>품목코드</th><th>규격</th><th>재질</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead><tbody>';
+          nb.slice(0,8).forEach(function(c){html+='<tr><td class="mono">'+esc(c.code||"-")+'</td><td class="mono">'+esc(c.dim)+'</td><td>'+esc(c.mat||"-")+'</td><td class="mut">'+esc(c.cust||"-")+'</td><td style="text-align:right">'+(c.qty||"")+'개</td><td style="text-align:right;font-weight:600">'+won(c.price)+'원</td></tr>';});
+          html+='</tbody></table><div class="hint" style="margin-top:2px">정확 일치 이력이 없어 같은 재질·가까운 치수 실거래의 중앙값으로 추천.</div></div>';
+        }else if(C&&C.ok){
+          html+='<div style="margin-top:8px"><b>원가추정(무게기반)</b> <span class="mut" style="font-size:11px">[유사 실거래 없음]</span>'
+            +'<table style="margin-top:2px"><tbody>';
+          C.breakdown.forEach(function(x){html+='<tr><td class="mut">'+esc(x.k)+'</td><td style="text-align:right">'+won(x.v)+'원</td></tr>';});
+          html+='<tr><td>추정단가(개당)</td><td style="text-align:right;font-weight:700">'+won(C.sell)+'원</td></tr></tbody></table>'
+            +'<div class="hint" style="margin-top:2px">유사 실거래가 없어 단가표(설정 탭)로 추정. 실제와 차이날 수 있음.</div></div>';
         }
+      }
+      // 실거래 이력(판매/매입/견적) — 키가 매칭되면 항상 표시. 더보기로 전체 펼침.
+      if(H){
+        var sHdr='<thead><tr><th>날짜</th><th>품목코드</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead>';
+        var rowS=function(s){return '<tr><td class="mut">'+esc(s[0])+'</td><td class="mono">'+esc(s[4]||"-")+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td></tr>';};
+        var SH=5; // 기본 표시 건수, 나머지는 더보기로 전체 펼침
+        var histTbl=function(title,arr,total){
+          if(!arr||!arr.length)return '';
+          var head='<div class="mut" style="font-size:11.5px;margin-top:8px;font-weight:700;color:var(--ink)">'+title+' <span style="font-weight:400;color:var(--muted)">(표시 '+arr.length+'건'+(total&&total>arr.length?(' / 전체 '+total+'건'):'')+')</span></div>';
+          var t=head+'<table style="margin-top:2px">'+sHdr+'<tbody>'+arr.slice(0,SH).map(rowS).join("")+'</tbody></table>';
+          if(arr.length>SH)t+='<details style="margin-top:4px"><summary style="cursor:pointer;color:var(--accent);font-size:12.5px;font-weight:700">더보기 (+'+(arr.length-SH)+'건 전체보기)</summary><table style="margin-top:2px">'+sHdr+'<tbody>'+arr.slice(SH).map(rowS).join("")+'</tbody></table></details>';
+          return t;
+        };
+        html+='<div style="margin-top:8px"><b>실거래 이력</b> <span class="mut" style="font-size:11px">['+esc(keyDesc(H.key))+']</span>';
+        if(hp)html+='<div class="mut" style="font-size:12px">'+H.basis+' '+H.n+'건 · 범위 '+won(H.min)+'~'+won(H.max)+'원'+(H.vol?' <span class="lo">⚠편차큼</span>':'')+'</div>';
+        html+=histTbl('📤 판매이력(출고)',H.samples,hp&&H.basis==="실판매"?H.n:0)
+            +histTbl('📥 매입이력(입고)',H.buySamples,0)
+            +histTbl('📝 견적이력',H.quoSamples,(!hp||H.basis==="견적")?H.n:0);
+        if(!H.samples.length&&!H.buySamples.length&&!H.quoSamples.length)html+='<div class="mut" style="font-size:11px;margin-top:4px">표시할 이력이 없습니다.</div>';
         html+='</div>';
-      }else if(nb.length){
-        html+='<div style="margin-top:8px"><b>유사 실거래</b> <span class="mut" style="font-size:11px">['+(sameMat?'동일재질 '+itMat+' '+N.n+'건 중앙값':'재질 혼합 — 동일재질 이력 부족')+']</span>'
-          +'<table style="margin-top:2px"><thead><tr><th>품목코드</th><th>규격</th><th>재질</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead><tbody>';
-        nb.slice(0,8).forEach(function(c){html+='<tr><td class="mono">'+esc(c.code||"-")+'</td><td class="mono">'+esc(c.dim)+'</td><td>'+esc(c.mat||"-")+'</td><td class="mut">'+esc(c.cust||"-")+'</td><td style="text-align:right">'+(c.qty||"")+'개</td><td style="text-align:right;font-weight:600">'+won(c.price)+'원</td></tr>';});
-        html+='</tbody></table><div class="hint" style="margin-top:2px">정확 일치 이력이 없어 같은 재질·가까운 치수 실거래의 중앙값으로 추천.</div></div>';
-      }else if(C&&C.ok){
-        html+='<div style="margin-top:8px"><b>원가추정(무게기반)</b> <span class="mut" style="font-size:11px">[유사 실거래 없음]</span>'
-          +'<table style="margin-top:2px"><tbody>';
-        C.breakdown.forEach(function(x){html+='<tr><td class="mut">'+esc(x.k)+'</td><td style="text-align:right">'+won(x.v)+'원</td></tr>';});
-        html+='<tr><td>추정단가(개당)</td><td style="text-align:right;font-weight:700">'+won(C.sell)+'원</td></tr></tbody></table>'
-          +'<div class="hint" style="margin-top:2px">유사 실거래가 없어 단가표(설정 탭)로 추정. 실제와 차이날 수 있음.</div></div>';
       }
       html+='</div></div>';
     });
@@ -909,7 +929,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v5";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v6";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
