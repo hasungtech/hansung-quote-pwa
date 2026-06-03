@@ -436,6 +436,40 @@ function showInfo(title,body){
   document.getElementById("infoClose").onclick=function(){host.innerHTML="";};
   document.getElementById("infoBd").onclick=function(e){if(e.target.id==="infoBd")host.innerHTML="";};
 }
+// HTML 본문 모달(표 등 서식 포함)
+function showHTML(title,bodyHtml){
+  var host=document.getElementById("modalHost");if(!host)return;
+  host.innerHTML='<div class="modal-bd" id="infoBd"><div class="modal"><h2>'+esc(title)+'</h2>'
+    +'<div style="margin-top:8px">'+bodyHtml+'</div>'
+    +'<div class="flx" style="margin-top:12px"><button class="run" id="infoClose" style="flex:1">닫기</button></div></div></div>';
+  document.getElementById("infoClose").onclick=function(){host.innerHTML="";};
+  document.getElementById("infoBd").onclick=function(e){if(e.target.id==="infoBd")host.innerHTML="";};
+}
+// 견적 성사 배지 클릭 → 어떤 거래로 이어졌는지 팝업
+var CONV=[];
+function showConv(i){
+  var o=CONV[i];if(!o)return;var q=o.q,m=o.m;
+  var dd=function(qd,sd){var a=new Date(qd),b=new Date(sd);var n=Math.round((b-a)/86400000);return isNaN(n)?"":n;};
+  var gap=m?dd(q[0],m[0]):"";
+  var html='<div style="font-size:13px;line-height:1.7">'
+    +'<div style="background:var(--soft);border-radius:8px;padding:12px 14px">'
+    +'<div style="font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.5px">제출한 견적</div>'
+    +'<div style="margin-top:4px"><b>'+esc(q[2]||"-")+'</b> · <span class="mono">'+esc(q[4]||"-")+'</span></div>'
+    +'<div class="mut" style="font-size:12.5px">'+esc(q[0])+' · 견적가 <b>'+won(q[1])+'원</b> · 수량 '+(q[3]||"-")+'개</div></div>'
+    +'<div style="text-align:center;color:var(--green);font-size:20px;margin:6px 0">↓ 거래 성사</div>';
+  if(m){
+    html+='<div style="background:#f0f8f2;border:1px solid #cfe8d6;border-radius:8px;padding:12px 14px">'
+      +'<div style="font-size:11px;color:var(--green);font-weight:700;letter-spacing:.5px">실제 출고된 거래</div>'
+      +'<div style="margin-top:4px"><b>'+esc(q[2]||"-")+'</b> <span class="mut" style="font-size:11px">(견적과 같은 거래처)</span></div>'
+      +'<div class="mut" style="font-size:12.5px">'+esc(m[0])+' 출고 · 출고단가 <b>'+won(m[2])+'원</b> · 수량 '+(m[1]||"-")+'개'
+      +(gap!==""?(' · 견적 후 '+gap+'일'):'')+'</div></div>'
+      +'<div class="hint" style="margin-top:10px">※ 견적일 이후 1년 내, 같은 거래처에 같은 품목코드(<span class="mono">'+esc(q[4]||"")+'</span>)가 출고된 첫 기록입니다. 직접 연결이 아닌 자동 매칭이므로 별개 주문일 수 있습니다.</div>';
+  }else{
+    html+='<div class="hint">매칭된 출고 상세가 저장되지 않았습니다.</div>';
+  }
+  html+='</div>';
+  showHTML("거래 성사 내역",html);
+}
 // PDF는 pdf.js로 페이지별 이미지로 변환(다중 페이지·대용량 대응, 서버 본문 4.5MB 제한 회피)
 function loadPdfJs(){
   if(window.pdfjsLib)return Promise.resolve(window.pdfjsLib);
@@ -703,6 +737,7 @@ function openHistory(){
 }
 
 function renderRun(){
+  CONV=[]; // 성사 팝업 레지스트리 초기화
   var html='<div class="card"><h2>문의 입력 (자연어·여러 줄)</h2>'
     +'<textarea id="ta" rows="5">'+esc(state.text)+'</textarea>'
     +'<div class="flx"><button class="run" id="runBtn" style="flex:1">인식 & 견적 실행</button>'
@@ -791,9 +826,14 @@ function renderRun(){
         var sHdr='<thead><tr><th>날짜</th><th>품목코드</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead>';
         var rowS=function(s){return '<tr><td class="mut">'+esc(s[0])+'</td><td class="mono">'+esc(s[4]||"-")+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td></tr>';};
         // 견적 전용: 거래성사 컬럼 추가
-        var CV={2:'<span style="color:#0a7d33;font-weight:700">✅성사</span>',1:'<span style="color:#b8860b;font-weight:700">⏳대기</span>',0:'<span style="color:#aaa">✗미성사</span>'};
+        var CV={1:'<span style="color:#b8860b;font-weight:700">⏳대기</span>',0:'<span style="color:#aaa">✗미성사</span>'};
         var sHdrQ='<thead><tr><th>날짜</th><th>품목코드</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">견적가</th><th style="text-align:center">거래성사</th></tr></thead>';
-        var rowQ=function(s){return '<tr><td class="mut">'+esc(s[0])+'</td><td class="mono">'+esc(s[4]||"-")+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td><td style="text-align:center;font-size:11px">'+(CV[s[5]]||CV[0])+'</td></tr>';};
+        var convBadge=function(s){
+          if(s[5]!==2)return CV[s[5]]||CV[0];
+          var i=CONV.push({q:s,m:s[6]})-1; // 성사: 클릭 시 어느 거래인지 팝업
+          return '<span onclick="showConv('+i+')" style="color:#0a7d33;font-weight:700;cursor:pointer;text-decoration:underline;text-underline-offset:2px">✅성사</span>';
+        };
+        var rowQ=function(s){return '<tr><td class="mut">'+esc(s[0])+'</td><td class="mono">'+esc(s[4]||"-")+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td><td style="text-align:center;font-size:11px">'+convBadge(s)+'</td></tr>';};
         var SH=5; // 기본 표시 건수, 나머지는 더보기로 전체 펼침
         var histTbl=function(title,arr,total,hdr,rfn){
           if(!arr||!arr.length)return '';
@@ -939,7 +979,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v7";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v8";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
