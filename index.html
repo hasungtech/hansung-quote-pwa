@@ -218,11 +218,90 @@ function persist(){try{localStorage.setItem("hsq_v3",JSON.stringify({cfg:state.c
 })();
 
 // ===== 실거래 가격이력 매칭 (price_history.json) =====
-var PRICE_HISTORY=null, HIST_IDX=null;
+var PRICE_HISTORY=null, HIST_IDX=null, PRICE_SRC={src:"",ts:null};
+function applyPH(j,src,ts){PRICE_HISTORY=j;PRICE_SRC={src:src,ts:ts||null};buildHistIndex();if(state.tab==="run"){runPipeline();renderRun();}else if(state.tab==="config"){renderCfg();}}
+function loadBundledPH(){fetch("price_history.json").then(function(r){return r.ok?r.json():null;}).then(function(j){if(j)applyPH(j,"bundled",null);}).catch(function(){});}
 function loadPriceHistory(){
-  fetch("price_history.json").then(function(r){return r.ok?r.json():null;}).then(function(j){
-    if(j){PRICE_HISTORY=j;buildHistIndex();if(state.tab==="run"){runPipeline();renderRun();}}
-  }).catch(function(){});
+  // 클라우드(Vercel Blob)에 업로드된 최신 데이터가 있으면 우선 사용, 없으면 기본 번들
+  fetch("/api/pricedata").then(function(r){return r.ok?r.json():null;}).then(function(meta){
+    if(meta&&meta.url){
+      var u=meta.url+(meta.url.indexOf("?")>=0?"&":"?")+"v="+encodeURIComponent(meta.updatedAt||Date.now());
+      return fetch(u).then(function(r){return r.ok?r.json():null;}).then(function(j){if(j){applyPH(j,"cloud",meta.updatedAt);return true;}return false;});
+    }
+    return false;
+  }).catch(function(){return false;}).then(function(ok){if(!ok)loadBundledPH();});
+}
+// ===== 거래내역 엑셀 → 가격데이터 재생성 (브라우저, 파이썬 빌드와 동일 로직) =====
+var MAT_ORDER=[["VITON","FKM"],["바이톤","FKM"],["FKM","FKM"],["EPDM","EPDM"],["SILICONE","SILICON"],["SILICON","SILICON"],["실리콘","SILICON"],["우레탄","PU"],["URETHANE","PU"],["PTFE","PTFE"],["테프론","PTFE"],["TEFLON","PTFE"],["POM","POM"],["NYLON","NYLON"],["나일론","NYLON"],["페놀","PHENOLIC"],["HNBR","HNBR"],["NBR","NBR"],["니트릴","NBR"]];
+function matKw(s){var u=s.toUpperCase();for(var i=0;i<MAT_ORDER.length;i++){if(u.indexOf(MAT_ORDER[i][0])>=0)return MAT_ORDER[i][1];}return "";}
+function inferMatB(code,name){var s=String(name)+" "+String(code);var m=matKw(s);if(m)return m;var c=String(code).toUpperCase().replace(/ /g,"");if(/(FT|F|V)$/.test(c))return "FKM";if(/Q$/.test(c))return "SILICON";var U=s.toUpperCase(),ex=["WEAR","BACK","GASKET","PTFE","NYLON","페놀","BUSH","CARBON","BRONZE"];for(var i=0;i<ex.length;i++)if(U.indexOf(ex[i])>=0)return "";return "NBR";}
+function normB(x){return String(Number(parseFloat(x).toFixed(2)));}
+function pyRound(x){if(!isFinite(x))return 0;var f=Math.floor(x),d=x-f;if(d<0.5)return f;if(d>0.5)return f+1;return (f%2===0)?f:f+1;}
+var CODE_RE_B=/(AS568-?\d+|P\d+(?:\.\d+)?[A-Z]?|G\d+[A-Z]?|S\d+[A-Z]?|AN\s?\d+|K\d+)/;
+var DIM3_B=/(\d+\.?\d*)\s*[*xX]\s*(\d+\.?\d*)\s*[*xX]\s*(\d+\.?\d*)/;
+var DIM2_B=/(\d+\.?\d*)\s*[*xX]\s*(\d+\.?\d*)/;
+var TYPE_LIST_B=/(TCN|TCV|TC|SC|SB|TB|VF|VH|DSI|SKY|VA|VS)/g;
+function isWordCh(ch){return ch!==""&&ch!=null&&/[\p{L}\p{N}_]/u.test(ch);}
+function findTypeB(text){TYPE_LIST_B.lastIndex=0;var m;while((m=TYPE_LIST_B.exec(text))){var s=m.index,e=s+m[0].length;if(!isWordCh(text.charAt(s-1))&&!isWordCh(text.charAt(e)))return m[0];}return null;}
+function keysForB(code,name,mat){var ks=[],seen={},add=function(k){if(!seen[k]){seen[k]=1;ks.push(k);}};
+  var text=(String(code)+" "+String(name)).toUpperCase().replace(/\*/g,"x");
+  var cm=CODE_RE_B.exec(text);
+  if(cm){var c=cm[1].replace(/[\s-]/g,"");if(/^(AN|P|G|S|K)\d/.test(c))c=c.replace(/(FT|F|Q|J|N|E|S|V|T)$/,"");add("C:"+c);if(mat)add("C:"+c+"|"+mat);}
+  var tm=findTypeB(text),d3=DIM3_B.exec(text);
+  if(tm&&d3){var a=normB(d3[1]),b=normB(d3[2]),cc=normB(d3[3]);add("D:"+tm+":"+a+"x"+b+"x"+cc);if(mat)add("D:"+tm+":"+a+"x"+b+"x"+cc+"|"+mat);}
+  if(d3&&!tm){var A=normB(d3[1]),B=normB(d3[2]),C=normB(d3[3]);add("D::"+A+"x"+B+"x"+C);if(mat)add("D::"+A+"x"+B+"x"+C+"|"+mat);}
+  var d2=DIM2_B.exec(text);
+  if(d2&&!d3){var a2=normB(d2[1]),b2=normB(d2[2]);add("D::"+a2+"x"+b2);if(mat)add("D::"+a2+"x"+b2+"|"+mat);}
+  return ks;}
+function ncustB(c){return String(c==null?"":c).trim();}
+function ncodeB(c){return String(c==null?"":c).toUpperCase().replace(/[\s\-./]/g,"");}
+function fmtB(y,mo,d){return y+"-"+(mo<10?"0":"")+mo+"-"+(d<10?"0":"")+d;}
+function excelDateB(v){if(v==null||v==="")return null;
+  if(v instanceof Date)return {ts:Date.UTC(v.getFullYear(),v.getMonth(),v.getDate()),ymd:fmtB(v.getFullYear(),v.getMonth()+1,v.getDate())};
+  if(typeof v==="number"){var ms=Math.round((v-25569)*86400000),d=new Date(ms);return {ts:Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()),ymd:fmtB(d.getUTCFullYear(),d.getUTCMonth()+1,d.getUTCDate())};}
+  var s=String(v),m=s.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);if(m)return {ts:Date.UTC(+m[1],+m[2]-1,+m[3]),ymd:fmtB(+m[1],+m[2],+m[3])};return null;}
+var EXCLUDE_B=["금형","등분 견적","택배","운임","DC","할인","운반","샘플"],DAY_B=86400000;
+function volOfB(prices){var ps=prices.slice(0,12);if(ps.length<2)return 0;var sum=0,i;for(i=0;i<ps.length;i++)sum+=ps[i];var m=sum/ps.length;if(m<=0)return 0;var v=0;for(i=0;i<ps.length;i++)v+=(ps[i]-m)*(ps[i]-m);var sd=Math.sqrt(v/ps.length),mn=Math.min.apply(null,ps),mx=Math.max.apply(null,ps);return (sd/m>0.25||mx/Math.max(mn,1)>1.8)?1:0;}
+function buildPriceHistory(rows,caps){caps=caps||{sale:30,buy:20,quo:20};
+  var SELL={},MAXD=null,i,k;
+  for(i=1;i<rows.length;i++){var r=rows[i];if(!r)continue;var code=r[0],cust=r[2],dt=excelDateB(r[3]),gb=r[4],qty=r[5],price=r[6];
+    if(!dt)continue;if(MAXD===null||dt.ts>MAXD)MAXD=dt.ts;
+    if(String(gb)==="출고"&&code!=null&&code!==""){var sp=parseFloat(price);sp=isNaN(sp)?0:pyRound(sp);var sq=parseInt(qty,10);sq=isNaN(sq)?0:sq;var key=ncustB(cust)+" "+ncodeB(code);(SELL[key]=SELL[key]||[]).push([dt.ts,sq,sp,dt.ymd]);}}
+  for(k in SELL)SELL[k].sort(function(a,b){return a[0]-b[0];});
+  function bisectLeft(arr,t){var lo=0,hi=arr.length;while(lo<hi){var mid=(lo+hi)>>1;if(arr[mid][0]<t)lo=mid+1;else hi=mid;}return lo;}
+  function convFlag(cust,code,ts){var key=ncustB(cust)+" "+ncodeB(code),ds=SELL[key];if(ds){var i2=bisectLeft(ds,ts-7*DAY_B);if(i2<ds.length&&ds[i2][0]<=ts+365*DAY_B){var m=ds[i2];return [2,[m[3],m[1],m[2]]];}}if(MAXD!==null&&(MAXD-ts)/DAY_B<=60)return [1,0];return [0,0];}
+  var won={},buy={},quo={};
+  for(i=1;i<rows.length;i++){var r2=rows[i];if(!r2)continue;var code2=r2[0],name2=r2[1],cust2=r2[2],dt2=excelDateB(r2[3]),gb2=r2[4],qty2=r2[5],price2=r2[6];
+    if(code2==null||code2===""||name2==null||name2==="")continue;
+    var nm=String(name2),skip=false,e;for(e=0;e<EXCLUDE_B.length;e++)if(nm.indexOf(EXCLUDE_B[e])>=0){skip=true;break;}if(skip)continue;
+    var p=parseFloat(price2);if(isNaN(p))p=0;if(p<=0||p>2000000)continue;var q=parseInt(qty2,10);if(isNaN(q))q=0;if(!dt2)continue;
+    var mat=inferMatB(code2,name2);var rec=[dt2.ymd,pyRound(p),String(cust2==null?"":cust2).trim().slice(0,16),q,String(code2).trim().slice(0,16)];
+    var g=String(gb2),dst;if(g==="출고")dst=won;else if(g==="입고")dst=buy;else if(g==="견적"){dst=quo;var cf=convFlag(cust2,code2,dt2.ts);rec=rec.concat([cf[0],cf[1]]);}else continue;
+    var ks=keysForB(code2,name2,mat),j;for(j=0;j<ks.length;j++)(dst[ks[j]]=dst[ks[j]]||[]).push(rec);}
+  function srtDesc(a){return a.slice().sort(function(x,y){return x[0]<y[0]?1:(x[0]>y[0]?-1:0);});}
+  var out={},allk={};for(k in won)allk[k]=1;for(k in buy)allk[k]=1;for(k in quo)allk[k]=1;
+  for(k in allk){var w=srtDesc(won[k]||[]),b=srtDesc(buy[k]||[]),qq=srtDesc(quo[k]||[]);var src=w.length?w:qq,basis=w.length?0:1;var n=0,mn=0,mx=0,vol=0;
+    if(src.length){var prices=src.map(function(x){return x[1];});n=prices.length;mn=pyRound(Math.min.apply(null,prices));mx=pyRound(Math.max.apply(null,prices));vol=volOfB(prices);}
+    out[k]=[basis,n,mn,mx,vol,w.slice(0,caps.sale).map(function(x){return [x[0],x[1],x[2],x[3],x[4]];}),b.slice(0,caps.buy).map(function(x){return [x[0],x[1],x[2],x[3],x[4]];}),qq.slice(0,caps.quo).map(function(x){return [x[0],x[1],x[2],x[3],x[4],x[5],x[6]];})];}
+  return out;}
+function loadXLSX(){if(window.XLSX)return Promise.resolve(window.XLSX);return new Promise(function(res,rej){var s=document.createElement("script");s.src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";s.onload=function(){res(window.XLSX);};s.onerror=function(){rej(new Error("엑셀 라이브러리 로드 실패(인터넷 연결 확인)"));};document.head.appendChild(s);});}
+function uploadPriceData(jsonStr,adminKey,onProg){
+  return import("https://esm.sh/@vercel/blob@0.27/client").then(function(mod){
+    return mod.upload("data/price_history.json",new Blob([jsonStr],{type:"application/json"}),{access:"public",handleUploadUrl:"/api/pricedata",clientPayload:String(adminKey||""),onUploadProgress:function(p){if(onProg)onProg(p.percentage);}});
+  }).then(function(b){return b.url;});
+}
+function rebuildFromFile(file,adminKey,st){
+  return loadXLSX().then(function(XLSX){st("엑셀 읽는 중…");
+    return file.arrayBuffer().then(function(buf){st("엑셀 파싱 중… (수만 건, 잠시 소요)");
+      return new Promise(function(res){setTimeout(function(){var wb=XLSX.read(new Uint8Array(buf),{type:"array"});var ws=wb.Sheets[wb.SheetNames[0]];res(XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null}));},60);});
+    }).then(function(rows){if(!rows||rows.length<2)throw new Error("엑셀에 데이터가 없습니다.");
+      var h=(rows[0]||[]).join(",");if(h.indexOf("거래구분")<0||h.indexOf("품목단가")<0)throw new Error("열 형식이 달라요. (품목코드·품목명·거래처명·날짜·거래구분·품목수량·품목단가 필요)");
+      st("가격 데이터 생성 중… ("+(rows.length-1).toLocaleString()+"행)");
+      return new Promise(function(res){setTimeout(function(){res(buildPriceHistory(rows));},60);}).then(function(out){return {out:out,nrow:rows.length-1};});
+    }).then(function(o){var n=Object.keys(o.out).length;st("업로드 중… (품목키 "+n.toLocaleString()+"개)");
+      return uploadPriceData(JSON.stringify(o.out),adminKey,function(pct){st("업로드 중… "+Math.round(pct)+"%");}).then(function(url){return {url:url,keys:n,rows:o.nrow};});
+    });
+  });
 }
 // 유사품 검색용 인덱스: 타입별 (치수·재질·최근가) 점들
 function buildHistIndex(){
@@ -878,7 +957,16 @@ function renderRun(){
 
 function renderCfg(){
   var c=state.cfg;
-  var html='<div class="card"><h2>부피 계산식 (제품 형태별)</h2><div class="hint" style="margin-top:0;margin-bottom:10px">변수: id(내경) od(외경) h(높이) PI. mm³ 반환.</div>';
+  var srcTxt=PRICE_SRC.src==="cloud"?("클라우드 최신 ("+(PRICE_SRC.ts?new Date(PRICE_SRC.ts).toLocaleString("ko-KR"):"")+")"):(PRICE_SRC.src==="bundled"?"기본 번들 데이터":"로딩 중…");
+  var html='<div class="card"><h2>전체자료 업데이트 (거래내역 엑셀)</h2>'
+    +'<div class="hint" style="margin-top:0">새 거래내역 엑셀(.xlsx)을 올리면 브라우저에서 26만건 기준 <b>판매·매입·견적 가격데이터를 다시 만들어 클라우드(Vercel Blob)에 저장</b>합니다. 저장하면 모든 직원에게 즉시 반영됩니다. 열: 품목코드·품목명·거래처명·날짜·거래구분·품목수량·품목단가. <b>수만 건 처리에 1~2분 걸릴 수 있어요(PC 권장).</b></div>'
+    +'<div style="margin:8px 0;font-size:13px">현재 데이터: <b id="phSrc" style="color:var(--accent)">'+esc(srcTxt)+'</b></div>'
+    +'<div class="grid3" style="margin-bottom:8px"><div><label>관리자 비밀번호</label><input id="upKey" type="password" placeholder="업로드 권한"></div>'
+    +'<div style="grid-column:span 2"><label>거래내역 엑셀(.xlsx)</label><input id="upFile" type="file" accept=".xlsx,.xls"></div></div>'
+    +'<button class="run" id="upBtn">업로드 &amp; 전체 갱신</button>'
+    +'<div id="upStat" class="hint" style="margin-top:8px;white-space:pre-wrap"></div>'
+    +'<div class="hint" style="margin-top:4px;font-size:10.5px">※ 관리자 비밀번호는 Vercel 환경변수 <b>DATA_ADMIN_KEY</b>로 설정합니다. Blob 미연결 시 기존 번들 데이터로 계속 동작합니다.</div></div>';
+  html+='<div class="card"><h2>부피 계산식 (제품 형태별)</h2><div class="hint" style="margin-top:0;margin-bottom:10px">변수: id(내경) od(외경) h(높이) PI. mm³ 반환.</div>';
   Object.keys(state.shapes).forEach(function(cat){
     html+='<div style="margin-bottom:12px"><label>'+cat+' — '+state.shapes[cat].label+'</label>'
       +'<textarea class="mono shapeF" data-cat="'+cat+'" rows="2">'+esc(state.shapes[cat].formula)+'</textarea></div>';
@@ -957,6 +1045,18 @@ function renderCfg(){
     for(var i=0;i<p.length-1;i++)o=o[p[i]]=o[p[i]]||{};
     o[p[p.length-1]]=parseFloat(el.value)||0;persist();
   };});
+  var upBtn=pane.querySelector("#upBtn");
+  if(upBtn)upBtn.onclick=function(){
+    var fEl=pane.querySelector("#upFile"),f=fEl&&fEl.files&&fEl.files[0],key=(pane.querySelector("#upKey")||{}).value,st=pane.querySelector("#upStat");
+    var set=function(t){if(st)st.textContent=t;};
+    if(!f){set("거래내역 엑셀(.xlsx) 파일을 선택하세요.");return;}
+    if(!key){set("관리자 비밀번호를 입력하세요.");return;}
+    upBtn.disabled=true;
+    rebuildFromFile(f,key,set).then(function(r){
+      set("✅ 완료: 품목키 "+r.keys.toLocaleString()+"개 · "+r.rows.toLocaleString()+"행 처리. 새 데이터를 불러옵니다…");
+      upBtn.disabled=false;loadPriceHistory();
+    }).catch(function(e){set("❌ 실패: "+((e&&e.message)?e.message:String(e)));upBtn.disabled=false;});
+  };
 }
 
 function switchTab(t){
@@ -979,7 +1079,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v8";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v9";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
