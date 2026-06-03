@@ -7,6 +7,8 @@
 #   *_samples: [date, price, cust, qty, code] 의 리스트(최신순)
 import openpyxl, re, json, statistics, sys
 from collections import defaultdict
+from datetime import datetime, timedelta
+import bisect
 
 src = sys.argv[1] if len(sys.argv) > 1 else "/root/.claude/uploads/bbe1baef-4c85-4af7-ba35-e24511b32496/826173da-____________20260602_100018.xlsx"
 SALE_CAP = int(sys.argv[2]) if len(sys.argv) > 2 else 60   # 판매이력 최대 표시 건수
@@ -56,8 +58,32 @@ def keys_for(code,name,mat):
         a,b=[norm(x) for x in d2.groups()]; ks.add("D::%sx%s"%(a,b))
         if mat: ks.add("D::%sx%s|%s"%(a,b,mat))
     return ks
-won=defaultdict(list); buy=defaultdict(list); quo=defaultdict(list)
 EXCLUDE=("금형","등분 견적","택배","운임","DC","할인","운반","샘플")
+def ncust(c): return str(c or "").strip()
+def ncode(c): return re.sub(r'[\s\-./]','',str(c or "").upper())
+
+# 1차 패스: 견적→거래 성사 판정을 위해 (거래처,품목코드)별 출고일자 인덱스 구축
+SELL_IDX=defaultdict(list); MAXD=None
+rows=ws.iter_rows(values_only=True); next(rows)
+for r in rows:
+    code,name,cust,date,gb,qty,price,amt=(list(r)+[None]*8)[:8]
+    if not isinstance(date,datetime): continue
+    if MAXD is None or date>MAXD: MAXD=date
+    if str(gb)=="출고" and code: SELL_IDX[(ncust(cust),ncode(code))].append(date)
+for k in SELL_IDX: SELL_IDX[k].sort()
+RECENT_DAYS=60  # 견적일이 데이터 최신일 기준 이 기간 이내면 '대기중'(아직 판단 보류)
+def conv_flag(cust,code,qd):
+    # 2=성사(견적 후 1년 내 같은 거래처에 같은 코드 출고), 1=대기중(최근 견적), 0=미성사
+    if not isinstance(qd,datetime): return 0
+    ds=SELL_IDX.get((ncust(cust),ncode(code)))
+    if ds:
+        lo=qd-timedelta(days=7); hi=qd+timedelta(days=365)
+        i=bisect.bisect_left(ds,lo)
+        if i<len(ds) and ds[i]<=hi: return 2
+    if MAXD and (MAXD-qd).days<=RECENT_DAYS: return 1
+    return 0
+
+won=defaultdict(list); buy=defaultdict(list); quo=defaultdict(list)
 rows=ws.iter_rows(values_only=True); next(rows)
 for r in rows:
     code,name,cust,date,gb,qty,price,amt=(list(r)+[None]*8)[:8]
@@ -73,7 +99,7 @@ for r in rows:
     g=str(gb)
     if g=="출고":   dst=won
     elif g=="입고": dst=buy
-    elif g=="견적": dst=quo
+    elif g=="견적": dst=quo; rec=rec+(conv_flag(cust,code,date),) # 6번째: 거래성사 플래그
     else: continue
     for k in keys_for(code,name,mat): dst[k].append(rec)
 def vol_of(pr):
@@ -96,7 +122,7 @@ for k in set(won)|set(buy)|set(quo):
     out[k]=[basis,n,mn,mx,vol,
             [[x[0],x[1],x[2],x[3],x[4]] for x in w[:SALE_CAP]],
             [[x[0],x[1],x[2],x[3],x[4]] for x in b[:BUY_CAP]],
-            [[x[0],x[1],x[2],x[3],x[4]] for x in q[:QUO_CAP]]]
+            [[x[0],x[1],x[2],x[3],x[4],x[5]] for x in q[:QUO_CAP]]]  # 견적: 6번째=성사플래그
 j=json.dumps(out,ensure_ascii=False,separators=(",",":"))
 open("price_history.json","w",encoding="utf-8").write(j)
 print("키:",len(out),"| 크기:",round(len(j.encode())/1024/1024,2),"MB","| caps",SALE_CAP,BUY_CAP,QUO_CAP)

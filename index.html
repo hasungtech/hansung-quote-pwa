@@ -790,19 +790,29 @@ function renderRun(){
       if(H){
         var sHdr='<thead><tr><th>날짜</th><th>품목코드</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th></tr></thead>';
         var rowS=function(s){return '<tr><td class="mut">'+esc(s[0])+'</td><td class="mono">'+esc(s[4]||"-")+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td></tr>';};
+        // 견적 전용: 거래성사 컬럼 추가
+        var CV={2:'<span style="color:#0a7d33;font-weight:700">✅성사</span>',1:'<span style="color:#b8860b;font-weight:700">⏳대기</span>',0:'<span style="color:#aaa">✗미성사</span>'};
+        var sHdrQ='<thead><tr><th>날짜</th><th>품목코드</th><th>거래처</th><th style="text-align:right">수량</th><th style="text-align:right">견적가</th><th style="text-align:center">거래성사</th></tr></thead>';
+        var rowQ=function(s){return '<tr><td class="mut">'+esc(s[0])+'</td><td class="mono">'+esc(s[4]||"-")+'</td><td>'+esc(s[2]||"-")+'</td><td style="text-align:right">'+(s[3]||"")+'개</td><td style="text-align:right;font-weight:600">'+won(s[1])+'원</td><td style="text-align:center;font-size:11px">'+(CV[s[5]]||CV[0])+'</td></tr>';};
         var SH=5; // 기본 표시 건수, 나머지는 더보기로 전체 펼침
-        var histTbl=function(title,arr,total){
+        var histTbl=function(title,arr,total,hdr,rfn){
           if(!arr||!arr.length)return '';
+          hdr=hdr||sHdr;rfn=rfn||rowS;
           var head='<div class="mut" style="font-size:11.5px;margin-top:8px;font-weight:700;color:var(--ink)">'+title+' <span style="font-weight:400;color:var(--muted)">(표시 '+arr.length+'건'+(total&&total>arr.length?(' / 전체 '+total+'건'):'')+')</span></div>';
-          var t=head+'<table style="margin-top:2px">'+sHdr+'<tbody>'+arr.slice(0,SH).map(rowS).join("")+'</tbody></table>';
-          if(arr.length>SH)t+='<details style="margin-top:4px"><summary style="cursor:pointer;color:var(--accent);font-size:12.5px;font-weight:700">더보기 (+'+(arr.length-SH)+'건 전체보기)</summary><table style="margin-top:2px">'+sHdr+'<tbody>'+arr.slice(SH).map(rowS).join("")+'</tbody></table></details>';
+          var t=head+'<table style="margin-top:2px">'+hdr+'<tbody>'+arr.slice(0,SH).map(rfn).join("")+'</tbody></table>';
+          if(arr.length>SH)t+='<details style="margin-top:4px"><summary style="cursor:pointer;color:var(--accent);font-size:12.5px;font-weight:700">더보기 (+'+(arr.length-SH)+'건 전체보기)</summary><table style="margin-top:2px">'+hdr+'<tbody>'+arr.slice(SH).map(rfn).join("")+'</tbody></table></details>';
           return t;
         };
+        // 견적이력 성사율 요약(표시분 기준)
+        var qtitle='📝 견적이력';
+        if(H.quoSamples&&H.quoSamples.length){var nW=H.quoSamples.filter(function(s){return s[5]===2;}).length;
+          qtitle+=' — 성사 '+nW+' / 미성사 '+(H.quoSamples.filter(function(s){return s[5]===0;}).length)+(H.quoSamples.filter(function(s){return s[5]===1;}).length?(' / 대기 '+H.quoSamples.filter(function(s){return s[5]===1;}).length):'');}
         html+='<div style="margin-top:8px"><b>실거래 이력</b> <span class="mut" style="font-size:11px">['+esc(keyDesc(H.key))+']</span>';
         if(hp)html+='<div class="mut" style="font-size:12px">'+H.basis+' '+H.n+'건 · 범위 '+won(H.min)+'~'+won(H.max)+'원'+(H.vol?' <span class="lo">⚠편차큼</span>':'')+'</div>';
         html+=histTbl('📤 판매이력(출고)',H.samples,hp&&H.basis==="실판매"?H.n:0)
             +histTbl('📥 매입이력(입고)',H.buySamples,0)
-            +histTbl('📝 견적이력',H.quoSamples,(!hp||H.basis==="견적")?H.n:0);
+            +histTbl(qtitle,H.quoSamples,(!hp||H.basis==="견적")?H.n:0,sHdrQ,rowQ);
+        if(H.quoSamples&&H.quoSamples.length)html+='<div class="hint" style="font-size:10.5px;margin-top:2px">※ 거래성사=견적 후 1년 내 같은 거래처에 같은 품목코드 출고 기록이 있으면 성사로 판정(추정).</div>';
         if(!H.samples.length&&!H.buySamples.length&&!H.quoSamples.length)html+='<div class="mut" style="font-size:11px;margin-top:4px">표시할 이력이 없습니다.</div>';
         html+='</div>';
       }
@@ -929,7 +939,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v6";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v7";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
