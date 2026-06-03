@@ -23,15 +23,22 @@ module.exports = async function handler(req, res) {
   if (req.method === "GET") {
     if (!hasToken) { res.status(200).json({ url: null, configured: false }); return; }
     try {
-      const { blobs } = await blobMod.list({ prefix: "data/price_history" });
-      let best = null;
-      for (const b of blobs) {
-        if (!best || new Date(b.uploadedAt) > new Date(best.uploadedAt)) best = b;
-      }
+      const pickNewest = (blobs) => {
+        let best = null;
+        for (const b of blobs) {
+          if (!best || new Date(b.uploadedAt) > new Date(best.uploadedAt)) best = b;
+        }
+        return best;
+      };
+      const ph = await blobMod.list({ prefix: "data/price_history" });
+      const rw = await blobMod.list({ prefix: "data/raw_rows" });
+      const best = pickNewest(ph.blobs);
+      const rawBest = pickNewest(rw.blobs);
       res.status(200).json({
         url: best ? best.url : null,
         updatedAt: best ? best.uploadedAt : null,
         size: best ? best.size : 0,
+        rawUrl: rawBest ? rawBest.url : null,
         configured: true,
       });
     } catch (e) {
