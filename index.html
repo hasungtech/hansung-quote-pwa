@@ -70,16 +70,18 @@
 // ===== A: 자연어 인식 =====
 var TYPE_PREFIXES=["TCN","TCV","TC","SC","SB","TB","VF","VH","DSI","SKY","VA","VS"];
 // 재질 인식(긴/구체 키워드를 앞에 둬 부분일치 오인 방지). 미등록 재질명도 인식되면 기본단가로 가격 산출.
-var MAT={HNBR:"HNBR",FFKM:"FFKM","칼레즈":"FFKM",VITON:"FKM","바이톤":"FKM",FKM:"FKM",EPDM:"EPDM",SILICONE:"SILICON",SILICON:"SILICON","실리콘":"SILICON","폴리우레탄":"PU","우레탄":"PU","유레탄":"PU",URETHANE:"PU",POLYURETHANE:"PU",PU:"PU",PTFE:"PTFE","테프론":"PTFE",TEFLON:"PTFE",POM:"POM","네오프렌":"CR",NEOPRENE:"CR",AFLAS:"AFLAS","아프라스":"AFLAS",NBR:"NBR","니트릴":"NBR"};
+var MAT={HNBR:"HNBR","수소화니트릴":"HNBR",FFKM:"FFKM","칼레즈":"FFKM",VITON:"FKM","바이톤":"FKM","비톤":"FKM","불소고무":"FKM","불소":"FKM",FKM:"FKM",EPDM:"EPDM","에치디피엠":"EPDM",SILICONE:"SILICON",SILICON:"SILICON","실리콘":"SILICON","실리":"SILICON","폴리우레탄":"PU","우레탄":"PU","유레탄":"PU",URETHANE:"PU",POLYURETHANE:"PU",PU:"PU",PTFE:"PTFE","테프론":"PTFE",TEFLON:"PTFE","사불화":"PTFE",POM:"POM","네오프렌":"CR",NEOPRENE:"CR",CR:"CR",AFLAS:"AFLAS","아프라스":"AFLAS",NBR:"NBR","니트릴고무":"NBR","니트릴":"NBR","니트":"NBR"};
 function parseLine(line){
   var raw=line.trim(); if(!raw)return null;
-  var u=raw.toUpperCase().replace(/[×✕╳⨯＊*・·•∙ㆍｘＸ]/g,"x").replace(/,(\d)/g,".$1");
+  var u=raw.toUpperCase().replace(/[Ø⌀ΦΦ]/g,"").replace(/파이/g,"").replace(/[×✕╳⨯＊*・·•∙ㆍｘＸ]/g,"x").replace(/,(\d)/g,".$1");
   var material=""; for(var k in MAT){if(u.indexOf(k)>=0){material=MAT[k];break;}}
-  var qty=0; var qm=raw.match(/(\d+)\s*(개|EA|ea|pcs|PCS|장)/); if(qm)qty=parseInt(qm[1]);
+  var qty=0; var qm=raw.match(/(\d+)\s*(?:개|EA|PCS?|장|본|SET|세트)(?![A-Za-z0-9])/i)||raw.match(/수량\s*[:：]?\s*(\d+)/); if(qm)qty=parseInt(qm[1],10);
   var codeM=u.match(/\b(AS568-\d+|[PGS]-?\d+(?:\.\d+)?[A-Z]?|AN-?\d+|K-?\d+)\b/);
   var sourceCode="",category="기타",type="",id=null,od=null,hh=null;
   var tf=""; for(var i=0;i<TYPE_PREFIXES.length;i++){var p=TYPE_PREFIXES[i];if(new RegExp("\\b"+p+"\\b|\\b"+p+"(?=[\\dJN])").test(u)){tf=p;break;}}
   var dm=u.match(/(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)/);
+  // 하이픈/대시로 나눈 치수도 인식: "50-65-9" (코드 P-285 등과 혼동 방지: 앞에 영문이 없을 때만)
+  if(!dm){var dmh=u.match(/(?:^|[^A-Z\d-])(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)(?![\d-])/);if(dmh)dm=dmh;}
   // 오링 2-숫자 표기(내경 x 굵기/단면). 3-숫자 치수가 없을 때만.
   var dm2=dm?null:u.match(/(\d+\.?\d*)\s*[xX]\s*(\d+\.?\d*)/);
   if(tf){category="OIL SEAL";type=tf;if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);}}
@@ -89,13 +91,30 @@ function parseLine(line){
   if(!tf&&!codeM&&!dm&&!dm2)return null;
   // 제품군 키워드 인식: 3-치수 품목이면 OIL SEAL 대신 구체 제품군으로 분류(설정 탭에서 공식 개별 편집)
   var hay=u+" "+raw;
-  var PRODS=[[/U-?PACKING|유.?패킹/,"U-PACKING"],[/DUST ?SEAL|더스트/,"DUST SEAL"],[/BACK ?UP ?RING|백업/,"BACK UP RING"],[/WEAR(ING)?|웨어/,"WEAR RING"]];
+  var PRODS=[[/U-?PACKING|유.?패킹|패킹/,"U-PACKING"],[/DUST ?SEAL|더스트/,"DUST SEAL"],[/BACK ?UP ?RING|백업/,"BACK UP RING"],[/WEAR(ING)?|웨어/,"WEAR RING"]];
   if(category==="OIL SEAL"){for(var pi=0;pi<PRODS.length;pi++){if(PRODS[pi][0].test(hay)){category=PRODS[pi][1];break;}}}
   return{category:category,type:type,material:material,id:id,od:od,h:hh,qty:qty,sourceCode:sourceCode,
     sizeSource:(id!=null&&od!=null)?"inline":sourceCode?"codeTable":"manual",
     confidence:"low",needsReview:true,rawText:raw};
 }
 function parseText(t){return t.split(/[\n;]+/).map(parseLine).filter(function(x){return x;});}
+// 자유형식 텍스트를 Claude로 인식 → 표준 줄로 정규화 후 기존 파이프라인에 투입
+function aiParseText(btn,auto){
+  var ta=document.getElementById("ta"),t=((ta?ta.value:state.text)||"").trim();
+  if(!t){if(!auto)showInfo("AI 인식","먼저 문의 내용을 입력하세요.");return;}
+  var orig=btn?btn.textContent:"";if(btn){btn.disabled=true;btn.textContent="🤖 AI 인식 중…";}
+  var ex=(state.cfg&&state.cfg.parseExamples)||[];
+  fetch("/api/parse",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:t,examples:ex})})
+    .then(function(r){return r.text().then(function(tx){var j;try{j=JSON.parse(tx);}catch(e){j={error:"서버 응답 오류(HTTP "+r.status+"). 함수 미배포(404)이거나 키 미설정일 수 있습니다."};}return{ok:r.ok,j:j};});})
+    .then(function(o){
+      if(btn){btn.disabled=false;btn.textContent=orig;}
+      if(!o.ok||!o.j||o.j.error){showInfo("AI 인식 실패",(o.j&&o.j.error)||"인식 실패. ANTHROPIC_API_KEY 설정과 네트워크를 확인하세요.");return;}
+      var out=(o.j.text||"").trim();
+      if(!out){showInfo("AI 인식","품목을 찾지 못했습니다. 내용을 조금 더 구체적으로 적어주세요.");return;}
+      state.text=out;persist();var ta2=document.getElementById("ta");if(ta2)ta2.value=out;
+      runPipeline();renderRun();if(missingResults().length>0)openFixModal();
+    }).catch(function(e){if(btn){btn.disabled=false;btn.textContent=orig;}showInfo("AI 인식 실패",(e&&e.message)||"네트워크 오류");});
+}
 
 // ===== B/C =====
 function nc(s){return String(s||"").trim().toUpperCase().replace(/\s+/g,"");}
@@ -848,9 +867,10 @@ function renderRun(){
   CONV=[]; // 성사 팝업 레지스트리 초기화
   var html='<div class="card"><h2>문의 입력 (자연어·여러 줄)</h2>'
     +'<textarea id="ta" rows="5">'+esc(state.text)+'</textarea>'
-    +'<div class="flx"><button class="run" id="runBtn" style="flex:1">인식 & 견적 실행</button>'
+    +'<div class="flx"><button class="run" id="runBtn" style="flex:1">인식 &amp; 견적 실행</button>'
     +'<label class="fbtn">도면·파일<input type="file" id="file" accept="image/*,application/pdf,.txt,.csv" multiple style="display:none"></label>'
     +'<button class="fbtn" id="clearBtn">지우기</button></div>'
+    +'<div class="flx" style="margin-top:6px"><button class="fbtn" id="aiParseBtn" style="flex:1">🤖 AI 자유형식 인식 — 형식 안 맞아도 알아서 인식</button></div>'
     +'<div class="hint">한 줄에 한 품목. 인식: 타입(TC/SC…)·치수(오일씰 50x65x9·오링 6x3.5)·코드(P50/AS568-150/AN374)·재질·수량. <b>도면(사진·PDF)을 여러 장 한 번에 올리면 Claude 비전이 자동 인식</b>합니다.</div></div>';
   if(state.results){
     if(state.results.length===0)html+='<div class="card mut">'+(state.text.trim()?'인식된 품목이 없습니다. 타입·치수·코드·재질·수량을 확인해 주세요.':'문의 내용을 입력해 주세요.')+'</div>';
@@ -969,7 +989,10 @@ function renderRun(){
   }
   var pane=document.getElementById("paneRun");
   pane.innerHTML=html;
-  document.getElementById("runBtn").onclick=function(){state.text=document.getElementById("ta").value;persist();runPipeline();renderRun();if(missingResults().length>0)openFixModal();};
+  document.getElementById("runBtn").onclick=function(){state.text=document.getElementById("ta").value;persist();runPipeline();renderRun();
+    if((!state.results||!state.results.length)&&state.text.trim()){aiParseText(document.getElementById("aiParseBtn"),true);return;}
+    if(missingResults().length>0)openFixModal();};
+  var apb=document.getElementById("aiParseBtn");if(apb)apb.onclick=function(){state.text=document.getElementById("ta").value;persist();aiParseText(this,false);};
   document.getElementById("ta").oninput=function(e){state.text=e.target.value;};
   document.getElementById("file").onchange=function(e){
     var fl=Array.prototype.slice.call(e.target.files||[]);if(!fl.length)return;
@@ -1109,7 +1132,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v10";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v11";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
