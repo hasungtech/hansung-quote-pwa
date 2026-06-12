@@ -17,6 +17,7 @@ async function ensureTable() {
 }
 
 module.exports = async function handler(req, res) {
+  if (process.env.APP_ACCESS_KEY && (req.headers["x-app-key"] || "") !== process.env.APP_ACCESS_KEY) { res.status(401).json({ error: "접근 권한이 없습니다. 설정에서 직원 접근 비밀번호를 입력하세요." }); return; }
   // 일부 Postgres 연동(Neon 등)은 DATABASE_URL만 주입 → @vercel/postgres가 읽는 POSTGRES_URL로 보정
   if (!process.env.POSTGRES_URL && process.env.DATABASE_URL) {
     process.env.POSTGRES_URL = process.env.DATABASE_URL;

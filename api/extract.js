@@ -33,6 +33,7 @@ module.exports = async function handler(req, res) {
     res.status(405).json({ error: "POST만 허용됩니다." });
     return;
   }
+  if (process.env.APP_ACCESS_KEY && (req.headers["x-app-key"] || "") !== process.env.APP_ACCESS_KEY) { res.status(401).json({ error: "접근 권한이 없습니다. 설정에서 직원 접근 비밀번호를 입력하세요." }); return; }
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     res.status(500).json({

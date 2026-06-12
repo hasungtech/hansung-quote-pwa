@@ -21,6 +21,8 @@ module.exports = async function handler(req, res) {
   const hasToken = !!process.env.BLOB_READ_WRITE_TOKEN;
 
   if (req.method === "GET") {
+    // GET은 데이터 위치(URL)를 노출하므로 직원 인증으로 보호(외부 유출 차단)
+    if (process.env.APP_ACCESS_KEY && (req.headers["x-app-key"] || "") !== process.env.APP_ACCESS_KEY) { res.status(401).json({ error: "접근 권한이 없습니다." }); return; }
     if (!hasToken) { res.status(200).json({ url: null, configured: false }); return; }
     try {
       const pickNewest = (blobs) => {

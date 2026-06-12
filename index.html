@@ -191,7 +191,9 @@ function fetchT(url,opts,ms){opts=opts||{};ms=ms||45000;
   if(APP_KEY)opts.headers=Object.assign({},opts.headers||{},{"x-app-key":APP_KEY});
   var ctrl=(typeof AbortController!=="undefined")?new AbortController():null;if(ctrl)opts.signal=ctrl.signal;
   var killed=false,to=setTimeout(function(){killed=true;if(ctrl)ctrl.abort();},ms);
-  return fetch(url,opts).then(function(r){clearTimeout(to);return r;},function(e){clearTimeout(to);throw killed?new Error("시간 초과 — 네트워크가 느립니다. 잠시 후 다시 시도해 주세요."):e;});
+  return fetch(url,opts).then(function(r){clearTimeout(to);
+    if(r.status===401&&!window.__authNotified){window.__authNotified=1;if(typeof showInfo==="function")showInfo("접근 권한 필요","직원 접근 비밀번호가 필요합니다. 설정 탭 → '직원 접근'에서 비밀번호를 입력해 주세요.");}
+    return r;},function(e){clearTimeout(to);throw killed?new Error("시간 초과 — 네트워크가 느립니다. 잠시 후 다시 시도해 주세요."):e;});
 }
 
 // ===== 상태 =====
@@ -994,7 +996,12 @@ function renderRun(){
 function renderCfg(){
   var c=state.cfg;
   var srcTxt=PRICE_SRC.src==="cloud"?("클라우드 최신 ("+(PRICE_SRC.ts?new Date(PRICE_SRC.ts).toLocaleString("ko-KR"):"")+")"):(PRICE_SRC.src==="bundled"?"기본 번들 데이터":"로딩 중…");
-  var html='<div class="card"><h2>전체자료 업데이트 (거래내역 엑셀)</h2>'
+  var html='<div class="card"><h2>직원 접근 (보안)</h2>'
+    +'<div class="hint" style="margin-top:0">서버에 <b>APP_ACCESS_KEY</b> 환경변수를 설정하면, 이 비밀번호를 입력한 직원만 AI 인식·견적 저장·클라우드 데이터를 사용할 수 있습니다(외부의 거래처·단가 유출 차단). <b>미설정 시 누구나 사용</b>(기존과 동일).</div>'
+    +'<div class="grid3" style="margin-top:8px"><div style="grid-column:span 2"><label>직원 접근 비밀번호</label><input id="appKey" type="password" value="'+esc(APP_KEY)+'" placeholder="APP_ACCESS_KEY 값"></div>'
+    +'<div style="display:flex;align-items:flex-end"><button class="fbtn" id="appKeySave" style="width:100%">저장</button></div></div>'
+    +'<div id="appKeyMsg" class="hint" style="margin-top:6px"></div></div>';
+  html+='<div class="card"><h2>전체자료 업데이트 (거래내역 엑셀)</h2>'
     +'<div class="hint" style="margin-top:0">거래내역 엑셀(.xlsx)을 올리면 브라우저에서 <b>판매·매입·견적 가격데이터를 다시 만들어 클라우드(Vercel Blob)에 저장</b>합니다. 저장하면 모든 직원에게 즉시 반영. 열: 품목코드·품목명·거래처명·날짜·거래구분·품목수량·품목단가. (PC 권장)</div>'
     +'<div style="margin:8px 0;font-size:13px">현재 데이터: <b id="phSrc" style="color:var(--accent)">'+esc(srcTxt)+'</b></div>'
     +'<div class="hint" style="margin-top:0;font-size:11px">📂 <b>전체 누적 파일을 그대로 한 번에 올리세요.</b> 지난 저장본과 비교해 <b>늘어난 부분(증분)만 자동으로 찾아</b> 반영하고, 결과에 "신규 N행"으로 알려드립니다. 파일을 따로 나눌 필요 없습니다.</div>'
@@ -1071,6 +1078,8 @@ function renderCfg(){
     for(var i=0;i<p.length-1;i++)o=o[p[i]]=o[p[i]]||{};
     o[p[p.length-1]]=parseFloat(el.value)||0;persist();
   };});
+  var akBtn=pane.querySelector("#appKeySave");
+  if(akBtn)akBtn.onclick=function(){var v=(pane.querySelector("#appKey")||{}).value||"";APP_KEY=v.trim();window.__authNotified=0;try{APP_KEY?localStorage.setItem("hsq_appkey",APP_KEY):localStorage.removeItem("hsq_appkey");}catch(e){}var m=pane.querySelector("#appKeyMsg");if(m)m.textContent="저장됨. 데이터를 다시 불러옵니다…";loadPriceHistory();};
   var upBtn=pane.querySelector("#upBtn");
   if(upBtn)upBtn.onclick=function(){
     var fEl=pane.querySelector("#upFile"),f=fEl&&fEl.files&&fEl.files[0],key=(pane.querySelector("#upKey")||{}).value,st=pane.querySelector("#upStat");
@@ -1105,7 +1114,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v13";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v14";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
