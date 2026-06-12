@@ -24,6 +24,7 @@
   .card h2{font-size:13px;font-weight:700;margin:0 0 8px}
   label{font-size:11px;color:var(--muted);margin-bottom:3px;display:block}
   input,select,textarea{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:3px;font-size:13px;font-family:inherit;color:var(--ink);outline:none;background:#fff}
+  @media (max-width:480px){input,select,textarea{font-size:16px}} /* iOS 포커스 시 자동 확대(줌) 방지 */
   textarea{resize:vertical;line-height:1.6}
   button{font-family:inherit;cursor:pointer}
   .run{width:100%;padding:11px;background:var(--accent);color:#fff;border:none;border-radius:3px;font-size:14px;font-weight:700}
@@ -104,7 +105,7 @@ function aiParseText(btn,auto){
   if(!t){if(!auto)showInfo("AI 인식","먼저 문의 내용을 입력하세요.");return;}
   var orig=btn?btn.textContent:"";if(btn){btn.disabled=true;btn.textContent="🤖 AI 인식 중…";}
   var ex=(state.cfg&&state.cfg.parseExamples)||[];
-  fetch("/api/parse",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:t,examples:ex})})
+  fetchT("/api/parse",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:t,examples:ex})},60000)
     .then(function(r){return r.text().then(function(tx){var j;try{j=JSON.parse(tx);}catch(e){j={error:"서버 응답 오류(HTTP "+r.status+"). 함수 미배포(404)이거나 키 미설정일 수 있습니다."};}return{ok:r.ok,j:j};});})
     .then(function(o){
       if(btn){btn.disabled=false;btn.textContent=orig;}
@@ -184,6 +185,14 @@ function finalPrice(base,qty){
   return Math.round(p);
 }
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+// 타임아웃 fetch(+선택적 직원 인증헤더) — 응답 지연 시 버튼 영구잠금/무한대기 방지
+var APP_KEY="";try{APP_KEY=localStorage.getItem("hsq_appkey")||"";}catch(e){}
+function fetchT(url,opts,ms){opts=opts||{};ms=ms||45000;
+  if(APP_KEY)opts.headers=Object.assign({},opts.headers||{},{"x-app-key":APP_KEY});
+  var ctrl=(typeof AbortController!=="undefined")?new AbortController():null;if(ctrl)opts.signal=ctrl.signal;
+  var killed=false,to=setTimeout(function(){killed=true;if(ctrl)ctrl.abort();},ms);
+  return fetch(url,opts).then(function(r){clearTimeout(to);return r;},function(e){clearTimeout(to);throw killed?new Error("시간 초과 — 네트워크가 느립니다. 잠시 후 다시 시도해 주세요."):e;});
+}
 
 // ===== 상태 =====
 var state={
@@ -226,7 +235,7 @@ function applyPH(j,src,ts){PRICE_HISTORY=j;PRICE_SRC={src:src,ts:ts||null};build
 function loadBundledPH(){fetch("price_history.json").then(function(r){return r.ok?r.json():null;}).then(function(j){if(j)applyPH(j,"bundled",null);}).catch(function(){});}
 function loadPriceHistory(){
   // 클라우드(Vercel Blob)에 업로드된 최신 데이터가 있으면 우선 사용, 없으면 기본 번들
-  fetch("/api/pricedata").then(function(r){return r.ok?r.json():null;}).then(function(meta){
+  fetchT("/api/pricedata",{},20000).then(function(r){return r.ok?r.json():null;}).then(function(meta){
     if(meta&&meta.url){
       var u=meta.url+(meta.url.indexOf("?")>=0?"&":"?")+"v="+encodeURIComponent(meta.updatedAt||Date.now());
       return fetch(u).then(function(r){return r.ok?r.json():null;}).then(function(j){if(j){applyPH(j,"cloud",meta.updatedAt);return true;}return false;});
@@ -289,7 +298,7 @@ function buildPriceHistory(rows,caps){caps=caps||{sale:30,buy:20,quo:20};
   return out;}
 function loadXLSX(){if(window.XLSX)return Promise.resolve(window.XLSX);return new Promise(function(res,rej){var s=document.createElement("script");s.src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";s.onload=function(){res(window.XLSX);};s.onerror=function(){rej(new Error("엑셀 라이브러리 로드 실패(인터넷 연결 확인)"));};document.head.appendChild(s);});}
 function loadPako(){if(window.pako)return Promise.resolve(window.pako);return new Promise(function(res,rej){var s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js";s.onload=function(){res(window.pako);};s.onerror=function(){rej(new Error("압축 라이브러리 로드 실패(인터넷 확인)"));};document.head.appendChild(s);});}
-function getMeta(){return fetch("/api/pricedata").then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});}
+function getMeta(){return fetchT("/api/pricedata",{},20000).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});}
 function uploadBlob(pathname,data,ctype,adminKey,onProg){
   return import("https://esm.sh/@vercel/blob@0.27/client").then(function(mod){
     return mod.upload(pathname,new Blob([data],{type:ctype}),{access:"public",handleUploadUrl:"/api/pricedata",clientPayload:String(adminKey||""),onUploadProgress:function(p){if(onProg)onProg(p.percentage);}});
@@ -606,7 +615,7 @@ function renderTask(task){ // Promise<{payload}|{error}>
   return Promise.resolve({error:"알 수 없는 작업"});
 }
 function postExtract(payload,attempt){
-  return fetch("/api/extract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({files:[payload]})})
+  return fetchT("/api/extract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({files:[payload]})},60000)
     .then(function(r){return r.text().then(function(tx){var j;try{j=JSON.parse(tx);}catch(e){j={error:"서버가 JSON이 아닌 응답을 반환했습니다(HTTP "+r.status+"). 함수 미배포(404)이거나 서버 오류일 수 있습니다."};}return{ok:r.ok,status:r.status,j:j};});})
     .then(function(o){
       if(o.ok)return{text:((o.j&&o.j.text)||"").trim()};
@@ -675,7 +684,7 @@ function collectQuoteItems(){
 function saveQuote(btn){
   var items=collectQuoteItems();if(!items.length){showInfo("저장 불가","저장할 견적(HIGH 판정 + 가격)이 없습니다.");return;}
   if(btn){btn.disabled=true;btn.textContent="저장 중…";}
-  fetch("/api/quotes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:items})})
+  fetchT("/api/quotes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:items})},30000)
     .then(function(r){return r.text().then(function(t){var j;try{j=JSON.parse(t);}catch(e){j={error:"서버가 JSON이 아닌 응답(HTTP "+r.status+")"};}return{ok:r.ok,j:j};});})
     .then(function(o){if(o.ok)showInfo("저장 완료",(o.j.saved||items.length)+"건을 클라우드에 저장했습니다.");else showInfo("저장 실패",(o.j&&o.j.error)||"저장에 실패했습니다.");renderRun();})
     .catch(function(e){showInfo("저장 실패",(e&&e.message)||"네트워크 오류");renderRun();});
@@ -711,7 +720,7 @@ function exportPDF(){
   var doc='<!DOCTYPE html><html lang=ko><head><meta charset=utf-8><title>견적서</title><style>body{font-family:-apple-system,sans-serif;padding:24px;color:#111}h1{font-size:22px;letter-spacing:8px;text-align:center;margin:0 0 4px}.sub{text-align:center;color:#666;font-size:12px;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}th{background:#f3f3f3}.r{text-align:right}.tot{font-weight:700;font-size:14px;background:#fafafa}.note{margin-top:14px;font-size:11px;color:#888}</style></head><body><h1>견 적 서</h1><div class=sub>한성테크 · 작성일 '+new Date().toLocaleDateString("ko-KR")+'</div>'+b+'<div class=note>※ 본 견적은 실거래 이력/원가 적산 기준 산출값입니다.</div><scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},250);}</scr'+'ipt></body></html>';
   w.document.write(doc);w.document.close();
 }
-function histFetch(qs){return fetch("/api/quotes"+(qs||"")).then(function(r){return r.text().then(function(t){var j;try{j=JSON.parse(t);}catch(e){j={error:"서버 오류(HTTP "+r.status+")"};}return{ok:r.ok,j:j};});});}
+function histFetch(qs){return fetchT("/api/quotes"+(qs||""),{},20000).then(function(r){return r.text().then(function(t){var j;try{j=JSON.parse(t);}catch(e){j={error:"서버 오류(HTTP "+r.status+")"};}return{ok:r.ok,j:j};});});}
 // ===== 정식 견적서(공급자·거래처·견적번호·VAT) =====
 function loadQuoteMeta(){try{return JSON.parse(localStorage.getItem("hsq_quote")||"{}")||{};}catch(e){return {};}}
 function saveQuoteMeta(m){try{localStorage.setItem("hsq_quote",JSON.stringify(m));}catch(e){}}
@@ -868,7 +877,9 @@ function renderRun(){
       html+='<div class="row"><b class="hi">인식</b> · '+esc(r.raw.category)+' '+esc(r.raw.type)+' '+esc(r.raw.sourceCode)
         +(r.raw.material?' / '+r.raw.material:'')
         +(r.raw.id!=null?' / '+r.raw.id+'×'+r.raw.od+'×'+(r.raw.h!=null?r.raw.h:'—'):'')
-        +' / '+(r.raw.qty||'?')+'개</div>';
+        +' / '+(r.raw.qty||'?')+'개'
+        +((r.raw.id!=null&&r.raw.od!=null&&r.raw.od<=r.raw.id)?' <span class="lo" style="font-weight:700">⚠ 외경이 내경보다 작거나 같습니다 — 치수를 확인하세요</span>':'')
+        +'</div>';
       if(r.raw.sourceCode){
         html+='<div class="row mut"><b style="color:var(--ink)">코드해석</b> · ';
         if(r.lookup)html+=r.lookup.ambiguous?(r.lookup.code+' → 후보 '+r.lookup.variants.length+'개(모호)'):(r.lookup.code+' → 내경 '+r.lookup.variants[0].id+' / 외경 '+r.lookup.variants[0].od);
@@ -966,7 +977,7 @@ function renderRun(){
     if((!state.results||!state.results.length)&&state.text.trim()){aiParseText(document.getElementById("aiParseBtn"),true);return;}
     if(missingResults().length>0)openFixModal();};
   var apb=document.getElementById("aiParseBtn");if(apb)apb.onclick=function(){state.text=document.getElementById("ta").value;persist();aiParseText(this,false);};
-  document.getElementById("ta").oninput=function(e){state.text=e.target.value;};
+  document.getElementById("ta").oninput=function(e){state.text=e.target.value;clearTimeout(window.__taSave);window.__taSave=setTimeout(persist,400);};
   document.getElementById("file").onchange=function(e){
     var fl=Array.prototype.slice.call(e.target.files||[]);if(!fl.length)return;
     var draw=fl.filter(function(f){return /^image\//.test(f.type)||f.type==="application/pdf";});
@@ -1094,7 +1105,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v12";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v13";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
