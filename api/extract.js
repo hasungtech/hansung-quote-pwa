@@ -33,6 +33,16 @@ const SYSTEM =
   "- 한 문서에 실링 품목과 비대상이 섞이면, 실링은 품목 줄로, 나머지는 #INFO 줄로 함께 출력.\n" +
   '- 예시: "OIL SEAL TC 50x65x9 NBR 30개", "U-PACKING 200x225x16 1개", "P50 NBR 100개", "O-RING 50x3.5 FKM 20개"';
 
+// 실제 고객 발주서/견적요청(팩스·이메일) 양식 학습용 예시(few-shot)
+const EXAMPLES =
+  "\n\n[실제 고객 발주서 판독 예시 — 같은 방식으로 추출]\n" +
+  "· 'OIL SEAL SC 240*275*16  MADE IN JAPAN   6 PCS'  →  OIL SEAL SC 240x275x16 6개\n" +
+  "· 손글씨 'V-PACKING  300×332×10T   4 SET' (T=두께mm, SET=세트)  →  U-PACKING 300x332x10 4개\n" +
+  "· 'O-RING  19.20 x 3.00  Shore 70   10 pcs' (Shore=경도이므로 치수 아님, 19.20=내경·3.00=굵기)  →  O-RING 19.2x3.0 10개\n" +
+  "· 'SHAFT SEAL  BAOF 25-32-2/2.5   4 pcs' (BAOF=오일씰류 모델, 25=내경 32=외경 2.5=폭)  →  OIL SEAL 25x32x2.5 4개\n" +
+  "· 표(여러 행)면 각 행을 한 줄씩. PART NO./MAKER/MODEL(F-300NV-A, YDFT-335-2 등)은 치수·재질이 따로 있으면 치수를 우선 출력.\n" +
+  "· 재질이 도면에 없으면 비워두세요(임의로 NBR 등 넣지 말 것). 단가·금액·합계·견적번호·선박명 등은 품목이 아니므로 무시.";
+
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "POST만 허용됩니다." });
@@ -74,9 +84,9 @@ module.exports = async function handler(req, res) {
     const client = new Anthropic({ apiKey: apiKey });
     const msg = await client.messages.create({
       model: MODEL,
-      max_tokens: 2048,
+      max_tokens: 4096,
       // 안정적인 시스템 프롬프트는 캐싱(짧으면 자동으로 캐시 미적용)
-      system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
+      system: [{ type: "text", text: SYSTEM + EXAMPLES, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: content }],
     });
 
