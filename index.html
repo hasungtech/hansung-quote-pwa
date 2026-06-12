@@ -457,6 +457,18 @@ function processItem(raw){
   return{raw:raw,lookup:lookup,c:c,hist:hist,cost:cost,comps:comps,neighbor:neighbor};
 }
 function isPriced(r){return !!((r.hist&&r.hist.hasPrice)||r.neighbor||(r.cost&&r.cost.ok));}
+// 견적 성사율 집계(price_history의 견적 이력 기반) — 중복 견적은 서명으로 1건 처리
+function winRateStats(){
+  if(!PRICE_HISTORY)return null;
+  var seen={},tot=0,won=0,wait=0,byCust={};
+  for(var k in PRICE_HISTORY){var q=PRICE_HISTORY[k][7];if(!q||!q.length)continue;
+    for(var i=0;i<q.length;i++){var s=q[i],sig=s[0]+"|"+s[1]+"|"+s[2]+"|"+s[3]+"|"+s[4];if(seen[sig])continue;seen[sig]=1;
+      tot++;var f=s[5],cust=s[2]||"-",cc=byCust[cust]||(byCust[cust]={t:0,w:0});cc.t++;
+      if(f===2){won++;cc.w++;}else if(f===1)wait++;}}
+  var arr=[];for(var cu in byCust)if(byCust[cu].t>=5)arr.push({cust:cu,t:byCust[cu].t,w:byCust[cu].w,rate:byCust[cu].w/byCust[cu].t});
+  arr.sort(function(a,b){return b.t-a.t;});
+  return{tot:tot,won:won,wait:wait,rate:tot?won/tot:0,top:arr.slice(0,20)};
+}
 function runPipeline(){state.results=parseText(state.text).map(processItem);}
 
 // ===== 빠진 정보 입력 창(모달) =====
@@ -737,12 +749,12 @@ function openQuoteForm(){
     +'<label style="margin-top:8px">거래처(받는 곳)</label><input id="q_cust" placeholder="○○ 주식회사 귀하" value="'+esc(Q.cust||"")+'">'
     +'<div class="grid3"><div><label>견적번호</label><input id="q_no" value="'+esc(Q.lastNo||("Q"+ymd()+"-01"))+'"></div>'
     +'<div><label>유효기간(일)</label><input id="q_valid" value="'+esc(String(Q.valid||30))+'"></div>'
-    +'<div><label>부가세</label><select id="q_vat"><option value="1">별도(10%)</option><option value="0">포함/면세</option></select></div></div>'
+    +'<div><label>부가세</label><select id="q_vat"><option value="1"'+(Q.vat===false?'':' selected')+'>별도(10%)</option><option value="0"'+(Q.vat===false?' selected':'')+'>포함/면세</option></select></div></div>'
     +'<div class="grid3"><div><label>금형비(별도, 원)</label><input id="q_mold" value="'+esc(String(Q.mold||""))+'" placeholder="신규 금형 시"></div><div style="grid-column:span 2"><label>비고</label><input id="q_note" value="'+esc(Q.note||"납기 별도 협의")+'"></div></div>'
     +'<div class="flx"><button class="run" id="q_pdf" style="flex:1">PDF·인쇄</button><button class="fbtn" id="q_csv">엑셀</button><button class="fbtn" id="q_close">닫기</button></div></div></div>';
   function v(id){var e=document.getElementById(id);return e?e.value.trim():"";}
   function meta(){var m={company:v("q_co"),bizno:v("q_biz"),tel:v("q_tel"),manager:v("q_mgr"),cust:v("q_cust"),no:v("q_no"),valid:v("q_valid"),vat:v("q_vat")==="1",note:v("q_note"),mold:parseFloat(v("q_mold"))||0};
-    saveQuoteMeta({company:m.company,bizno:m.bizno,tel:m.tel,manager:m.manager,cust:m.cust,valid:m.valid,note:m.note,lastNo:m.no,mold:m.mold});return m;}
+    saveQuoteMeta({company:m.company,bizno:m.bizno,tel:m.tel,manager:m.manager,cust:m.cust,valid:m.valid,note:m.note,lastNo:m.no,mold:m.mold,vat:m.vat});return m;}
   document.getElementById("q_close").onclick=function(){host.innerHTML="";};
   document.getElementById("qbd").onclick=function(e){if(e.target.id==="qbd")host.innerHTML="";};
   document.getElementById("q_pdf").onclick=function(){printQuote(meta(),rows);};
@@ -1001,6 +1013,23 @@ function renderCfg(){
     +'<div class="grid3" style="margin-top:8px"><div style="grid-column:span 2"><label>직원 접근 비밀번호</label><input id="appKey" type="password" value="'+esc(APP_KEY)+'" placeholder="APP_ACCESS_KEY 값"></div>'
     +'<div style="display:flex;align-items:flex-end"><button class="fbtn" id="appKeySave" style="width:100%">저장</button></div></div>'
     +'<div id="appKeyMsg" class="hint" style="margin-top:6px"></div></div>';
+  // 견적 성사율 대시보드
+  var W=winRateStats();
+  html+='<div class="card"><h2>견적 성사율 (거래처별)</h2>';
+  if(!W){html+='<div class="hint" style="margin-top:0">가격 데이터 로딩 중… 잠시 후 다시 열어 주세요.</div>';}
+  else{
+    var pct=Math.round(W.rate*100);
+    html+='<div class="hint" style="margin-top:0">견적이 실제 거래(출고)로 이어졌는지 집계(견적 후 1년 내 동일 거래처·코드 출고 기준). 표본 '+W.tot.toLocaleString()+'건.</div>'
+      +'<div style="display:flex;gap:14px;margin:8px 0;align-items:baseline"><div style="font-size:26px;font-weight:800;color:var(--accent)">'+pct+'%</div><div class="mut" style="font-size:12px">전체 성사 '+W.won.toLocaleString()+'건 / 표본 '+W.tot.toLocaleString()+'건'+(W.wait?(' · 대기 '+W.wait):'')+'</div></div>';
+    if(W.top.length){
+      html+='<div class="mut" style="font-size:11.5px;margin-top:4px">거래처별(견적 5건 이상, 견적수 순)</div>'
+        +'<table style="margin-top:2px"><thead><tr><th>거래처</th><th style="text-align:right">견적수</th><th style="text-align:right">성사</th><th style="text-align:right">성사율</th></tr></thead><tbody>';
+      W.top.forEach(function(x){var r=Math.round(x.rate*100),col=r>=50?'var(--green)':(r>=25?'#b8860b':'var(--accent)');
+        html+='<tr><td>'+esc(x.cust)+'</td><td style="text-align:right">'+x.t+'</td><td style="text-align:right">'+x.w+'</td><td style="text-align:right;font-weight:700;color:'+col+'">'+r+'%</td></tr>';});
+      html+='</tbody></table>';
+    }
+  }
+  html+='</div>';
   html+='<div class="card"><h2>전체자료 업데이트 (거래내역 엑셀)</h2>'
     +'<div class="hint" style="margin-top:0">거래내역 엑셀(.xlsx)을 올리면 브라우저에서 <b>판매·매입·견적 가격데이터를 다시 만들어 클라우드(Vercel Blob)에 저장</b>합니다. 저장하면 모든 직원에게 즉시 반영. 열: 품목코드·품목명·거래처명·날짜·거래구분·품목수량·품목단가. (PC 권장)</div>'
     +'<div style="margin:8px 0;font-size:13px">현재 데이터: <b id="phSrc" style="color:var(--accent)">'+esc(srcTxt)+'</b></div>'
@@ -1114,7 +1143,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v14";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v15";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
