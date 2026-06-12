@@ -70,11 +70,11 @@
 // ===== A: 자연어 인식 =====
 var TYPE_PREFIXES=["TCN","TCV","TC","SC","SB","TB","VF","VH","DSI","SKY","VA","VS"];
 // 재질 인식(긴/구체 키워드를 앞에 둬 부분일치 오인 방지). 미등록 재질명도 인식되면 기본단가로 가격 산출.
-var MAT={HNBR:"HNBR","수소화니트릴":"HNBR",FFKM:"FFKM","칼레즈":"FFKM",VITON:"FKM","바이톤":"FKM","비톤":"FKM","불소고무":"FKM","불소":"FKM",FKM:"FKM",EPDM:"EPDM","에치디피엠":"EPDM",SILICONE:"SILICON",SILICON:"SILICON","실리콘":"SILICON","실리":"SILICON","폴리우레탄":"PU","우레탄":"PU","유레탄":"PU",URETHANE:"PU",POLYURETHANE:"PU",PU:"PU",PTFE:"PTFE","테프론":"PTFE",TEFLON:"PTFE","사불화":"PTFE",POM:"POM","네오프렌":"CR",NEOPRENE:"CR",CR:"CR",AFLAS:"AFLAS","아프라스":"AFLAS",NBR:"NBR","니트릴고무":"NBR","니트릴":"NBR","니트":"NBR"};
+var MAT={HNBR:"HNBR","수소화니트릴":"HNBR",FFKM:"FFKM","칼레즈":"FFKM",VITON:"FKM","바이톤":"FKM","비톤":"FKM","불소고무":"FKM","불소":"FKM",FKM:"FKM",EPDM:"EPDM","에치디피엠":"EPDM",SILICONE:"SILICON",SILICON:"SILICON","실리콘":"SILICON","실리":"SILICON","폴리우레탄":"PU","우레탄":"PU","유레탄":"PU",URETHANE:"PU",POLYURETHANE:"PU",PU:"PU",PTFE:"PTFE","테프론":"PTFE",TEFLON:"PTFE","사불화":"PTFE",POM:"POM","네오프렌":"CR",NEOPRENE:"CR",CR:"CR",AFLAS:"AFLAS","아프라스":"AFLAS",NBR:"NBR","니트릴고무":"NBR","니트릴":"NBR"};
 function parseLine(line){
   var raw=line.trim(); if(!raw)return null;
   var u=raw.toUpperCase().replace(/[Ø⌀ΦΦ]/g,"").replace(/파이/g,"").replace(/[×✕╳⨯＊*・·•∙ㆍｘＸ]/g,"x").replace(/,(\d)/g,".$1");
-  var material=""; for(var k in MAT){if(u.indexOf(k)>=0){material=MAT[k];break;}}
+  var material="",_ml=0; for(var k in MAT){if(u.indexOf(k)>=0&&k.length>_ml){material=MAT[k];_ml=k.length;}} // 가장 긴(구체적인) 키 우선
   var qty=0; var qm=raw.match(/(\d+)\s*(?:개|EA|PCS?|장|본|SET|세트)(?![A-Za-z0-9])/i)||raw.match(/수량\s*[:：]?\s*(\d+)/); if(qm)qty=parseInt(qm[1],10);
   var codeM=u.match(/\b(AS568-\d+|[PGS]-?\d+(?:\.\d+)?[A-Z]?|AN-?\d+|K-?\d+)\b/);
   var sourceCode="",category="기타",type="",id=null,od=null,hh=null;
@@ -146,24 +146,6 @@ var DEFAULT_SHAPES={
   "BACK UP RING":{label:"백업링(근사: 원통링)",formula:"return PI*h*(Math.pow(od/2,2)-Math.pow(id/2,2));",needs:["id","od","h"]},
   "WEAR RING":{label:"웨어링(근사: 원통링)",formula:"return PI*h*(Math.pow(od/2,2)-Math.pow(id/2,2));",needs:["id","od","h"]}
 };
-function runVolume(formula,d){try{var fn=new Function("id","od","h","PI",formula);var v=fn(d.id,d.od,d.h,Math.PI);return(typeof v==="number"&&isFinite(v)&&v>0)?v:null;}catch(e){return null;}}
-function estimate(item,cfg,shapes){
-  var sh=shapes[item.category],shapeFallback=false;
-  // 제품군 공식이 없거나 그 공식에 필요한 치수가 부족하면 → 가진 치수로 기본 형상 자동 대체(무조건 가격 산출)
-  if(!(sh&&sh.needs.every(function(n){return item[n]!=null;}))){
-    if(item.id!=null&&item.od!=null&&item.h!=null)sh={formula:"return PI*h*(Math.pow(od/2,2)-Math.pow(id/2,2));",needs:["id","od","h"]};
-    else if(item.id!=null&&item.od!=null)sh={formula:"cs=(od-id)/2;r=cs/2;R=id/2+r;return 2*PI*PI*R*r*r;",needs:["id","od"]};
-    else return{ok:false,reason:"MISSING_DIMS"};
-    shapeFallback=true;
-  }
-  var vol=runVolume(sh.formula,item);if(vol==null||!(vol>0))return{ok:false,reason:"INVALID_DIMS"};
-  var m=(item.material||"").toUpperCase();
-  if(!m)return{ok:false,reason:"NO_MATERIAL"};
-  var den=cfg.density[m],up=cfg.unitPrice[m],matFallback=false;
-  if(den==null||up==null){den=cfg.fallbackDensity;up=cfg.fallbackUnitPrice;matFallback=true;} // 미등록 재질도 기본단가로 계산
-  var weightG=vol*(den/1000),materialCost=weightG*up,subtotal=cfg.fixedCost+materialCost;
-  return{ok:true,volumeMm3:vol,weightG:weightG,densityCm3:den,unitPriceGram:up,materialCost:materialCost,fixedCost:cfg.fixedCost,subtotal:subtotal,lossRate:cfg.lossRate,unitPrice:subtotal*(1+cfg.lossRate)*cfg.qtyFactor,matFallback:matFallback,shapeFallback:shapeFallback};
-}
 var SAMPLE_HISTORY=[
   {code:"TC21024015",type:"TC",oringCode:"",digits:"21024015",winRate:27.3,customers:2,avgWonPrice:7400,avgQuotePrice:8200},
   {code:"TC506509",type:"TC",oringCode:"",digits:"506509",winRate:42,customers:5,avgWonPrice:2500,avgQuotePrice:2800},
@@ -227,10 +209,12 @@ var state={
 };
 // 설정·입력 영속화(localStorage): 단가·비중·공식·로스율·입력이 새로고침에도 유지
 function persist(){try{localStorage.setItem("hsq_v3",JSON.stringify({cfg:state.cfg,shapes:state.shapes,text:state.text}));}catch(e){}}
+// 저장된 설정을 기본값 위에 '깊게' 병합 → 새 배포의 기본 단가표·신규 항목이 기존 사용자에게도 반영
+function deepMerge(t,s){if(!s||typeof s!=="object")return t;for(var k in s){var sv=s[k];if(sv&&typeof sv==="object"&&!Array.isArray(sv)&&t[k]&&typeof t[k]==="object"&&!Array.isArray(t[k]))deepMerge(t[k],sv);else t[k]=sv;}return t;}
 (function loadSaved(){
   try{
     var s=JSON.parse(localStorage.getItem("hsq_v3")||"null");if(!s)return;
-    if(s.cfg)for(var k in s.cfg)state.cfg[k]=s.cfg[k];
+    if(s.cfg)deepMerge(state.cfg,s.cfg);
     if(s.shapes)for(var c in s.shapes){if(state.shapes[c]&&s.shapes[c]&&s.shapes[c].formula)state.shapes[c].formula=s.shapes[c].formula;}
     if(typeof s.text==="string")state.text=s.text;
   }catch(e){}
@@ -378,27 +362,6 @@ function findComparables(it){
     return{dim:nm(o.p.id)+"×"+nm(o.p.od)+(o.p.h!=null?"×"+nm(o.p.h):""),mat:o.p.mat,price:o.p.price,n:o.p.n,cust:o.p.cust,qty:o.p.qty,date:o.p.date,code:o.p.code};
   });
 }
-function runAIPricing(){
-  if(!state.results||!HIST_IDX)return;
-  var need=[];
-  state.results.forEach(function(r,i){
-    if(r.hist||r.ai||r.aiLoading)return;
-    var it=r.c.item;if(it.id==null||it.od==null||!it.material)return;
-    var comps=findComparables(it);if(!comps.length)return;
-    r.aiLoading=true;r.aiComps=comps;
-    need.push({idx:i,item:{type:it.type||"",category:it.category,id:it.id,od:it.od,h:it.h,material:it.material},comparables:comps});
-  });
-  if(!need.length)return;
-  renderRun();
-  var mg=aiCfg().margin;
-  fetch("/api/price",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:need,policy:aiCfg().policy})})
-    .then(function(r){return r.json();}).then(function(j){
-      var arr=(j&&j.results)||[];
-      arr.forEach(function(a){var r=state.results[a.idx];if(r&&a.price){r.ai={raw:Math.round(a.price),price:Math.round(a.price*mg),margin:mg,confidence:a.confidence||"",reasoning:a.reasoning||"",comps:r.aiComps||[]};}});
-      need.forEach(function(n){if(state.results[n.idx])state.results[n.idx].aiLoading=false;});
-      renderRun();
-    }).catch(function(){need.forEach(function(n){if(state.results[n.idx])state.results[n.idx].aiLoading=false;});renderRun();});
-}
 function nm(x){return String(Math.round(parseFloat(x)*100)/100);}
 function histKeys(it){
   var ks=[],mat=it.material||"";
@@ -420,18 +383,21 @@ function keyDesc(key){ // 매칭키 → 사람이 읽는 근거 설명
 }
 function histMatch(it){
   if(!PRICE_HISTORY)return null;
-  var ks=histKeys(it),fallback=null;
+  var ks=histKeys(it),mm=null,buyF=null;
+  var pmed=function(a){return medOf(a.map(function(s){return s[1];}));};
   for(var i=0;i<ks.length;i++){var v=PRICE_HISTORY[ks[i]];if(!v)continue;
     var sales=v[5]||[],buy=v[6]||[],quo=v[7]||[];
     var ps=sales.length?sales:quo; // 가격 산정 스트림: 출고 우선, 없으면 견적
-    var hasPrice=ps.length>0;
-    var rs={key:ks[i],basis:v[0]===0?"실판매":"견적",n:v[1],min:v[2],max:v[3],vol:v[4]===1,
-      samples:sales,buySamples:buy,quoSamples:quo,
-      rec:hasPrice?ps[0][1]:null,date:hasPrice?ps[0][0]:"",hasPrice:hasPrice};
-    if(hasPrice)return rs; // 가격 있는 키 우선 반환
-    if(buy.length&&!fallback)fallback=rs; // 매입만 있으면 일단 보류(가격 키 없을 때만 사용)
+    var agnostic=ks[i].indexOf("|")<0; // 재질 무관 키
+    var base={key:ks[i],basis:v[0]===0?"실판매":"견적",n:v[1],min:v[2],max:v[3],vol:v[4]===1,
+      samples:sales,buySamples:buy,quoSamples:quo,buyMed:(buy.length?pmed(buy):null)};
+    if(ps.length){
+      // 재질을 입력했는데 재질 무관 키만 매칭되면 '다른 재질 가격'일 수 있어 추천가로 쓰지 않음(참고만)
+      if(!(agnostic&&it.material)){base.hasPrice=true;base.rec=ps[0][1];base.date=ps[0][0];base.recMedian=pmed(ps);return base;}
+      if(!mm){base.hasPrice=false;base.rec=null;base.date="";base.matMismatch=true;mm=base;}
+    }else if(buy.length&&!buyF){base.hasPrice=false;base.rec=null;base.date="";buyF=base;}
   }
-  return fallback; // 가격 키가 전혀 없으면 매입이력만이라도 표시
+  return mm||buyF; // 재질 일치 가격이 없으면: 재질 불일치 이력(참고) 또는 매입이력만 표시
 }
 // 원가 적산(공정별) — 클라이언트 계산, 어떤 제품이든 치수+재질이면 항상 산출
 // 단면(프로파일) 기반 원가: 타입/제품군에 충전율+원/g 등록 시 형상 기준 계산(단가표보다 우선)
@@ -933,6 +899,13 @@ function renderRun(){
         html+='<div class="price"><span style="font-size:12px;color:var(--muted)">추천가(개당) · '+hsrc+(hp?(' '+esc(H.date)):'')+'</span><b>'+won(headline)+'원</b></div>';
         var adj=[];if(qy&&qf!==1)adj.push('수량 '+qy+'개 ×'+qf);if(mf!==1)adj.push('마진 ×'+mf);if(state.cfg.minPrice&&base*qf*mf<state.cfg.minPrice)adj.push('최소단가 적용');
         if(adj.length)html+='<div class="mut" style="font-size:11px">기준 '+won(base)+'원 · '+adj.join(' · ')+'</div>';
+        // 매입가 대비 마진(정확 이력 매칭 시 매입이력이 있으면 표시) — 역마진 방지
+        var bMed=hp?H.buyMed:null;
+        if(bMed!=null&&bMed>0){var mgn=Math.round((headline-bMed)/headline*100);var mc=mgn<0?'#c92020':(mgn<15?'#b8860b':'#0a7d33');
+          html+='<div style="font-size:11.5px;margin-top:2px"><span style="color:'+mc+';font-weight:700">마진 '+mgn+'%</span> <span class="mut">(매입가 '+won(bMed)+'원/개 대비)</span>'+(mgn<0?' <span style="color:#c92020;font-weight:700">⚠ 역마진</span>':'')+'</div>';}
+        // 편차 큰 이력: 최근가와 중앙값을 함께 보여 확인 유도(추천가는 정책대로 최근가 유지)
+        if(hp&&H.vol&&H.recMedian!=null&&Math.abs(H.recMedian-base)>=1)
+          html+='<div class="mut" style="font-size:11px">⚠ 편차 큼 — 최근가 '+won(base)+'원 · 참고 중앙값 '+won(H.recMedian)+'원 (확인 권장)</div>';
       }
       // 가격 산정 근거(정확 일치 단가가 없을 때만): 유사 실거래 → 원가추정
       if(!hp){
@@ -1019,12 +992,7 @@ function renderCfg(){
     +'<button class="run" id="upBtn">전체 파일 업로드 &amp; 갱신</button>'
     +'<div id="upStat" class="hint" style="margin-top:8px;white-space:pre-wrap"></div>'
     +'<div class="hint" style="margin-top:4px;font-size:10.5px">※ 관리자 비밀번호는 Vercel 환경변수 <b>DATA_ADMIN_KEY</b>로 설정합니다. Blob 미연결 시 기존 번들 데이터로 계속 동작합니다.</div></div>';
-  html+='<div class="card"><h2>부피 계산식 (제품 형태별)</h2><div class="hint" style="margin-top:0;margin-bottom:10px">변수: id(내경) od(외경) h(높이) PI. mm³ 반환.</div>';
-  Object.keys(state.shapes).forEach(function(cat){
-    html+='<div style="margin-bottom:12px"><label>'+cat+' — '+state.shapes[cat].label+'</label>'
-      +'<textarea class="mono shapeF" data-cat="'+cat+'" rows="2">'+esc(state.shapes[cat].formula)+'</textarea></div>';
-  });
-  html+='</div><div class="card"><h2>재질별 비중(g/cm³) · 단가(원/g)</h2>';
+  html+='<div class="card"><h2>재질별 비중(g/cm³) · 단가(원/g)</h2>';
   ["NBR","FKM","EPDM","SILICON"].forEach(function(m){
     html+='<div class="matrow"><span style="font-size:13px">'+m+'</span>'
       +'<input class="den" data-m="'+m+'" value="'+c.density[m]+'"><input class="up" data-m="'+m+'" value="'+c.unitPrice[m]+'"></div>';
@@ -1035,15 +1003,12 @@ function renderCfg(){
     +'<div><label>수량계수</label><input id="qf" value="'+c.qtyFactor+'"></div></div>'
     +'<div class="hint">무게기반 계산은 실거래·AI 추정이 모두 불가할 때만 쓰는 최후 보조값입니다.</div></div>';
   var ac=aiCfg();
-  html+='<div class="card"><h2>AI 추정 설정 (이력 없는 품목 가격 도출)</h2>'
+  html+='<div class="card"><h2>유사 실거래 설정 (정확 이력 없을 때 보간)</h2>'
     +'<div class="grid3">'
     +'<div><label>유사품 개수</label><input id="aiN" value="'+ac.nComp+'"></div>'
-    +'<div><label>마진계수(1=그대로)</label><input id="aiM" value="'+ac.margin+'"></div>'
     +'<div><label>재질 엄격매칭</label><select id="aiS"><option value="0"'+(ac.sameMatOnly?"":" selected")+'>아니오(유사재질 허용)</option><option value="1"'+(ac.sameMatOnly?" selected":"")+'>예(동일재질만)</option></select></div>'
     +'</div>'
-    +'<label style="margin-top:10px">AI 가격정책 지침 (선택 — AI가 추론 시 우선 적용)</label>'
-    +'<textarea id="aiP" rows="3" placeholder="예) 신규 거래처는 10% 높게. 오링은 최소 300원. 대형(외경 200 이상)은 가공비 가산.">'+esc(ac.policy)+'</textarea>'
-    +'<div class="hint">AI는 위 설정 + 회사 실거래 중 가장 가까운 유사품을 근거로 단가를 추론합니다. 각 견적 결과에 "분석에 사용한 유사 실거래"가 함께 표시됩니다.</div></div>';
+    +'<div class="hint">정확 일치 이력이 없을 때, 같은 재질·가까운 치수의 실거래 몇 건을 골라 중앙값으로 추천가를 보간합니다.</div></div>';
   var qt=state.cfg.qtyTiers||(state.cfg.qtyTiers=[[1,1.15],[10,1],[50,0.92],[200,0.85],[1000,0.78]]);
   html+='<div class="card"><h2>수량·마진 정책</h2>'
     +'<div class="grid3"><div><label>목표마진계수(1=그대로)</label><input class="ck" data-p="marginFactor" value="'+(state.cfg.marginFactor!=null?state.cfg.marginFactor:1)+'"></div>'
@@ -1082,17 +1047,14 @@ function renderCfg(){
   var pane=document.getElementById("paneCfg");
   pane.innerHTML=html;
   // 바인딩
-  Array.prototype.forEach.call(pane.querySelectorAll(".shapeF"),function(el){el.oninput=function(){state.shapes[el.getAttribute("data-cat")].formula=el.value;persist();};});
   Array.prototype.forEach.call(pane.querySelectorAll(".den"),function(el){el.oninput=function(){state.cfg.density[el.getAttribute("data-m")]=parseFloat(el.value)||0;persist();};});
   Array.prototype.forEach.call(pane.querySelectorAll(".up"),function(el){el.oninput=function(){state.cfg.unitPrice[el.getAttribute("data-m")]=parseFloat(el.value)||0;persist();};});
   pane.querySelector("#fc").oninput=function(e){state.cfg.fixedCost=parseFloat(e.target.value)||0;persist();};
   pane.querySelector("#lr").oninput=function(e){state.cfg.lossRate=parseFloat(e.target.value)||0;persist();};
   pane.querySelector("#qf").oninput=function(e){state.cfg.qtyFactor=parseFloat(e.target.value)||1;persist();};
-  function ensureAi(){state.cfg.ai=state.cfg.ai||{nComp:6,sameMatOnly:false,margin:1,policy:""};return state.cfg.ai;}
+  function ensureAi(){state.cfg.ai=state.cfg.ai||{nComp:6,sameMatOnly:false};return state.cfg.ai;}
   pane.querySelector("#aiN").oninput=function(e){ensureAi().nComp=Math.max(1,Math.min(12,parseInt(e.target.value)||6));persist();};
-  pane.querySelector("#aiM").oninput=function(e){ensureAi().margin=parseFloat(e.target.value)||1;persist();};
   pane.querySelector("#aiS").onchange=function(e){ensureAi().sameMatOnly=e.target.value==="1";persist();};
-  pane.querySelector("#aiP").oninput=function(e){ensureAi().policy=e.target.value;persist();};
   Array.prototype.forEach.call(pane.querySelectorAll(".ck"),function(el){el.oninput=function(){
     var p=el.getAttribute("data-p").split("."),o=state.cfg.cost;
     for(var i=0;i<p.length-1;i++)o=o[p[i]]=o[p[i]]||{};
@@ -1132,7 +1094,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v11";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v12";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
