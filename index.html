@@ -623,7 +623,9 @@ function renderTask(task){ // Promise<{payload}|{error}>
     var vp=page.getViewport({scale:1}),scale=Math.min(2.5,1500/Math.max(vp.width,vp.height)),v=page.getViewport({scale:scale});
     var c=document.createElement("canvas");c.width=Math.round(v.width);c.height=Math.round(v.height);
     return page.render({canvasContext:c.getContext("2d"),viewport:v}).promise.then(function(){
-      var d=c.toDataURL("image/jpeg",0.8),i=d.indexOf(",");return{payload:{type:"image",media_type:"image/jpeg",data:d.slice(i+1)}};
+      var d=c.toDataURL("image/jpeg",0.8),i=d.indexOf(",");
+      c.width=0;c.height=0;if(page.cleanup)try{page.cleanup();}catch(e){} // 대량 처리 시 메모리 해제
+      return{payload:{type:"image",media_type:"image/jpeg",data:d.slice(i+1)}};
     });
   }).catch(function(){return{error:"PDF 페이지 변환 실패"};});
   return Promise.resolve({error:"알 수 없는 작업"});
@@ -669,7 +671,11 @@ function extractFromDrawings(tasks){ // 동시 4개씩, 각 task를 이미지로
 function startDrawingUpload(files){
   if(!files.length)return;
   showOcrProgress(0,files.length,0);
-  buildTasks(files).then(function(tasks){return extractFromDrawings(tasks);}).then(function(r){
+  buildTasks(files).then(function(tasks){
+    var pages=tasks.filter(function(t){return t.kind!=="error";}).length;
+    if(pages>50&&!window.confirm(pages.toLocaleString()+"페이지를 인식합니다.\n페이지가 많으면 시간·API 비용이 늘어납니다(대략 페이지당 1~3초).\n\n계속할까요? (너무 많으면 파일을 나눠 올리는 걸 권장)")){return Promise.reject({__cancel:1});}
+    return extractFromDrawings(tasks);
+  }).then(function(r){
     hideOcr();
     // 실링 품목 줄과 '자동견적 범위 밖' 요약(#INFO)을 분리
     var infos=[],items=[];
@@ -687,7 +693,7 @@ function startDrawingUpload(files){
       "이 도면은 고무 실링 부품(오일씰·오링·패킹) 자동견적 범위 밖으로 보입니다(예: 가공 금속 부품).\n\n[도면에서 읽은 정보]\n• "+infos.join("\n• ")+"\n\n※ 위 정보를 담당자에게 전달해 확인해 주세요. (아래 화면에도 표시됩니다)");
     if(itemText&&missingResults().length>0)openFixModal();
     else if(itemText&&r.fail&&!infos.length)showInfo("일부 인식 실패",r.total+"건 중 "+r.fail+"건은 실패해 제외했습니다."+(r.error?("\n\n예시 원인: "+r.error):"")+"\n나머지로 견적을 구성했습니다.");
-  }).catch(function(e){hideOcr();showInfo("처리 오류",(e&&e.message)||"파일 처리 중 오류가 발생했습니다.");});
+  }).catch(function(e){hideOcr();if(e&&e.__cancel)return;showInfo("처리 오류",(e&&e.message)||"파일 처리 중 오류가 발생했습니다.");});
 }
 
 // ===== 견적 저장/이력 (클라우드 DB) =====
@@ -1007,7 +1013,12 @@ function renderRun(){
   document.getElementById("file").onchange=function(e){
     var fl=Array.prototype.slice.call(e.target.files||[]);if(!fl.length)return;
     var draw=fl.filter(function(f){return /^image\//.test(f.type)||f.type==="application/pdf";});
-    if(draw.length){startDrawingUpload(draw);e.target.value="";return;}
+    if(draw.length){
+      var maxMB=Math.round(Math.max.apply(null,draw.map(function(f){return f.size||0;}))/1048576);
+      var mobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent||"");
+      if(maxMB>=25&&mobile&&!window.confirm("큰 파일("+maxMB+"MB)을 휴대폰에서 처리하면 멈출 수 있습니다.\nPC·크롬을 권장합니다. 그래도 계속할까요?")){e.target.value="";return;}
+      startDrawingUpload(draw);e.target.value="";return;
+    }
     var f=fl[0];var rd=new FileReader();rd.onload=function(ev){state.text=String(ev.target.result).slice(0,4000);runPipeline();renderRun();if(missingResults().length>0)openFixModal();};rd.readAsText(f);};
   var ofb=document.getElementById("openFix");if(ofb)ofb.onclick=openFixModal;
   var clb=document.getElementById("clearBtn");if(clb)clb.onclick=function(){state.text="";state.results=null;state.drawingInfo=null;renderRun();};
@@ -1155,7 +1166,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v17";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v18";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
