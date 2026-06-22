@@ -871,6 +871,7 @@ function renderRun(){
     +'<textarea id="ta" rows="5">'+esc(state.text)+'</textarea>'
     +'<div class="flx"><button class="run" id="runBtn" style="flex:1">인식 &amp; 견적 실행</button>'
     +'<label class="fbtn">도면·파일<input type="file" id="file" accept="image/*,application/pdf,.txt,.csv" multiple style="display:none"></label>'
+    +'<label class="fbtn">📁 폴더째<input type="file" id="fileDir" webkitdirectory directory multiple style="display:none"></label>'
     +'<button class="fbtn" id="clearBtn">지우기</button></div>'
     +'<div class="flx" style="margin-top:6px"><button class="fbtn" id="aiParseBtn" style="flex:1">🤖 AI 자유형식 인식 — 형식 안 맞아도 알아서 인식</button></div>'
     +'<div class="hint">한 줄에 한 품목. 인식: 타입(TC/SC…)·치수(오일씰 50x65x9·오링 6x3.5)·코드(P50/AS568-150/AN374)·재질·수량. <b>도면(사진·PDF)을 여러 장 한 번에 올리면 Claude 비전이 자동 인식</b>합니다.</div></div>';
@@ -1020,6 +1021,15 @@ function renderRun(){
       startDrawingUpload(draw);e.target.value="";return;
     }
     var f=fl[0];var rd=new FileReader();rd.onload=function(ev){state.text=String(ev.target.result).slice(0,4000);runPipeline();renderRun();if(missingResults().length>0)openFixModal();};rd.readAsText(f);};
+  var fd=document.getElementById("fileDir");
+  if(fd)fd.onchange=function(e){
+    var fl=Array.prototype.slice.call(e.target.files||[]);
+    var draw=fl.filter(function(f){return /^image\//.test(f.type)||f.type==="application/pdf"||/\.(pdf|jpe?g|png|webp)$/i.test(f.name||"");});
+    if(!draw.length){e.target.value="";showInfo("폴더 업로드","선택한 폴더에 PDF·이미지가 없습니다.");return;}
+    var rel=(draw[0].webkitRelativePath||"").split("/")[0]||"폴더";
+    if(!window.confirm("'"+rel+"' 폴더에서 PDF·이미지 "+draw.length.toLocaleString()+"개를 인식합니다.\n파일이 많으면 시간·API 비용이 큽니다. 계속할까요?")){e.target.value="";return;}
+    startDrawingUpload(draw);e.target.value="";
+  };
   var ofb=document.getElementById("openFix");if(ofb)ofb.onclick=openFixModal;
   var clb=document.getElementById("clearBtn");if(clb)clb.onclick=function(){state.text="";state.results=null;state.drawingInfo=null;renderRun();};
   var svb=document.getElementById("saveBtn");if(svb)svb.onclick=function(){saveQuote(this);};
@@ -1166,7 +1176,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v18";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v19";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
