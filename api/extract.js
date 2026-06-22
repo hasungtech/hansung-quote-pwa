@@ -64,6 +64,13 @@ module.exports = async function handler(req, res) {
       res.status(400).json({ error: "이미지가 없습니다." });
       return;
     }
+    // 회사가 교정·등록한 학습 예시(few-shot) — 인식 정확도를 회사 양식에 맞게 끌어올림
+    const learn = Array.isArray(body.examples) ? body.examples.slice(0, 40) : [];
+    let learnMsg = "";
+    if (learn.length) {
+      learnMsg = "\n\n[회사 등록 교정 예시 — 같은 방식으로 인식. 이 규칙을 최우선 적용]\n" +
+        learn.map(function (e) { return "입력형태: " + String(e.in || "").slice(0, 300) + "\n→ 출력: " + String(e.out || "").slice(0, 300); }).join("\n---\n");
+    }
     const content = [];
     files.slice(0, 5).forEach(function (f) {
       if (!f || !f.data) return;
@@ -87,7 +94,7 @@ module.exports = async function handler(req, res) {
       max_tokens: 4096,
       // 안정적인 시스템 프롬프트는 캐싱(짧으면 자동으로 캐시 미적용)
       system: [{ type: "text", text: SYSTEM + EXAMPLES, cache_control: { type: "ephemeral" } }],
-      messages: [{ role: "user", content: content }],
+      messages: [{ role: "user", content: content.concat(learnMsg ? [{ type: "text", text: learnMsg }] : []) }],
     });
 
     const textBlock = (msg.content || []).find(function (b) {
