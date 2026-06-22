@@ -34,13 +34,16 @@ module.exports = async function handler(req, res) {
       };
       const ph = await blobMod.list({ prefix: "data/price_history" });
       const rw = await blobMod.list({ prefix: "data/raw_rows" });
+      const lr = await blobMod.list({ prefix: "data/learn_examples" });
       const best = pickNewest(ph.blobs);
       const rawBest = pickNewest(rw.blobs);
+      const learnBest = pickNewest(lr.blobs);
       res.status(200).json({
         url: best ? best.url : null,
         updatedAt: best ? best.uploadedAt : null,
         size: best ? best.size : 0,
         rawUrl: rawBest ? rawBest.url : null,
+        learnUrl: learnBest ? learnBest.url : null,
         configured: true,
       });
     } catch (e) {
