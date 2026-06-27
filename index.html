@@ -1076,18 +1076,53 @@ function normLine(it){
   if(it.qty)p.push(it.qty+"개");
   return p.join(" ");
 }
+// 근접 치수 매칭(반올림·오타 보정용). 3치수(ID×OD×H) 품목만 — O-RING 등 2치수는 키 일치(histMatch)에 위임
+function nearHistMatch(it){
+  if(!HIST_IDX||it.id==null||it.od==null||it.h==null)return null;
+  var pool=(it.type&&HIST_IDX.byType[it.type])||HIST_IDX.byType[""]||[];
+  pool=pool.filter(function(p){return p.h!=null;});
+  if(!pool.length)return null;
+  var mat=(it.material||"").toUpperCase(),best=null;
+  for(var i=0;i<pool.length;i++){var p=pool[i];
+    var d=Math.abs((p.id||0)-it.id)+Math.abs((p.od||0)-it.od)+Math.abs((p.h||0)-it.h);
+    var matOk=!mat||!p.mat||String(p.mat).toUpperCase()===mat;
+    // 거리 우선, 같으면 재질 일치 우선
+    if(!best||d<best.d||(d===best.d&&matOk&&!best.matOk))best={p:p,d:d,matOk:matOk};
+  }
+  if(!best)return null;
+  return {dim:nm(best.p.id)+"×"+nm(best.p.od)+(best.p.h!=null?"×"+nm(best.p.h):""),
+    id:best.p.id,od:best.p.od,h:best.p.h,mat:best.p.mat,price:best.p.price,code:best.p.code,cust:best.p.cust,date:best.p.date,d:best.d,matOk:best.matOk};
+}
 // 결과 1건 → 교정 제안(정답 후보 + 신뢰도 + 근거). 매칭 근거가 강할수록 신뢰도↑
 function corrProposal(r){
-  var it=r.c.item,raw=(r.raw&&r.raw.rawText)||"",out=normLine(it);
-  if(!out||!raw)return null;
-  var conf="low",ev="이력 매칭 없음 — 정답을 직접 확인하세요",H=r.hist;
+  var it=r.c.item,raw=(r.raw&&r.raw.rawText)||"";
+  if(!raw)return null;
+  var H=r.hist;
+  // 1) 코드/치수+재질 정확 일치(가격 이력 보유) — 가장 신뢰
   if(H&&H.hasPrice){
-    var rec=H.rec||[],code=rec[4]||"",cust=rec[2]||"",price=rec[1];
-    var byCode=String(H.key||"").indexOf("C:")===0;
-    conf=byCode?"high":"high";
-    ev="✓ "+(H.basis||"이력")+" 일치"+(price?" · "+won(price)+"원":"")+(code?" · 코드 "+code:"")+(cust?" · "+cust:"");
-  }else if(r.neighbor){conf="med";ev="유사 거래 "+r.neighbor.n+"건"+(r.neighbor.sameMat?"(동일재질)":"")+" — 확인 권장";}
-  return {in:raw,out:out,conf:conf,ev:ev};
+    var s0=(H.samples&&H.samples[0])||(H.quoSamples&&H.quoSamples[0])||null;
+    var code=s0?(s0[4]||""):"",cust=s0?(s0[2]||""):"";
+    return {in:raw,out:normLine(it),conf:"high",code:code,
+      ev:"✓ "+(H.basis||"이력")+" 일치"+(H.rec?" · "+won(H.rec)+"원":"")+(code?" · 코드 "+code:"")+(cust?" · "+cust:"")};
+  }
+  // 2) 근접 치수 매칭 — 이력의 정확 치수/재질로 보정 제안(반올림·오타 흡수)
+  var nh=nearHistMatch(it),out=normLine(it);
+  if(nh){
+    var corrIt={category:it.category,type:it.type,id:nh.id,od:nh.od,h:nh.h,material:nh.mat||it.material,qty:it.qty};
+    var cout=normLine(corrIt),changed=cout!==out;
+    var tail=(nh.price?" · "+won(nh.price)+"원":"")+(nh.code?" · 코드 "+nh.code:"")+(nh.cust?" · "+nh.cust:"");
+    if(nh.d===0&&nh.matOk)return {in:raw,out:out,conf:"high",code:nh.code,ev:"✓ 이력과 치수·재질 일치"+tail};
+    if(nh.d<=6){
+      var note=changed?("치수 보정 "+nm(it.id)+"×"+nm(it.od)+(it.h!=null?"×"+nm(it.h):"")+" → "+nh.dim):"치수 일치";
+      if(!nh.matOk)note+=" · 재질 상이("+nh.mat+")";
+      return {in:raw,out:cout,conf:"med",code:nh.code,ev:"근접 이력(차이 "+nm(nh.d)+"mm) — "+note+tail};
+    }
+  }
+  // 3) 유사 거래만 있음
+  if(r.neighbor)return {in:raw,out:out,conf:"med",ev:"유사 거래 "+r.neighbor.n+"건"+(r.neighbor.sameMat?"(동일재질)":"")+" — 확인 권장"};
+  // 4) 매칭 없음
+  if(!out)return null;
+  return {in:raw,out:out,conf:"low",ev:"이력 매칭 없음 — 정답을 직접 확인하세요"};
 }
 function openLearnReview(){
   var host=document.getElementById("modalHost");if(!host)return;
@@ -1097,16 +1132,16 @@ function openLearnReview(){
   var rank={high:0,med:1,low:2};
   props.sort(function(a,b){return rank[a.conf]-rank[b.conf];});
   window.__corr=props;
-  var badge={high:'<span style="color:var(--green);font-weight:700">정확</span>',med:'<span style="color:#b8860b;font-weight:700">유사</span>',low:'<span style="color:var(--accent);font-weight:700">확인필요</span>'};
+  var badge={high:'<span style="color:var(--green);font-weight:700">정확</span>',med:'<span style="color:#b8860b;font-weight:700">유사·보정</span>',low:'<span style="color:var(--accent);font-weight:700">확인필요</span>'};
   var rows=props.map(function(p,i){
-    var chk=p.conf!=="low"?" checked":"";
+    var chk=p.conf==="high"?" checked":"";
     return '<div style="padding:8px 0;border-top:1px solid var(--line)"><label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer"><input type="checkbox" class="crChk" data-i="'+i+'"'+chk+' style="margin-top:3px">'
       +'<span style="flex:1;font-size:12.5px"><span class="mut">원문:</span> '+esc(p.in)+'  '+badge[p.conf]+'<br><span class="mut" style="font-size:11px">'+esc(p.ev)+'</span></span></label>'
       +'<div style="margin-top:4px;padding-left:26px"><span class="mut" style="font-size:11px">정답(표준줄, 수정 가능):</span><input class="crOut" data-i="'+i+'" value="'+esc(p.out)+'" style="width:100%;margin-top:2px"></div></div>';
   }).join("");
   var nHigh=props.filter(function(p){return p.conf==="high";}).length;
   host.innerHTML='<div class="modal-bd" id="crBd"><div class="modal"><h2>자동 교정 검토</h2>'
-    +'<div class="hint" style="margin-top:0">인식 결과를 거래·견적 이력과 대조했습니다. <b>정확</b>은 이력과 일치(신뢰 높음), <b>유사/확인필요</b>는 직접 확인하세요. 체크한 항목의 "정답 표준줄"이 학습됩니다. 이력 일치 '+nHigh+'건은 기본 선택됨.</div>'
+    +'<div class="hint" style="margin-top:0">인식 결과를 거래·견적 이력과 대조했습니다. <b>정확</b>=코드/치수·재질 일치(자동 선택), <b>유사·보정</b>=치수가 살짝 달라 이력의 정확 치수로 보정 제안(원문→보정 표시, 확인 후 체크), <b>확인필요</b>=매칭 없음. 체크한 "정답 표준줄"이 학습됩니다. 정확 일치 '+nHigh+'건 기본 선택됨.</div>'
     +'<div style="max-height:50vh;overflow:auto;margin-top:8px">'+rows+'</div>'
     +'<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12.5px"><input type="checkbox" id="crShare"> 저장 후 클라우드 공유(관리자) — 전 직원 반영</label>'
     +'<div class="flx" style="margin-top:10px"><button class="run" id="crSave" style="flex:1">선택 항목 학습 저장</button><button class="fbtn" id="crCancel">닫기</button></div>'
@@ -1301,7 +1336,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v22";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v23";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
