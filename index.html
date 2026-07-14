@@ -215,15 +215,12 @@ function saveLearnLocal(){try{LEARN=dedupLearn(LEARN);localStorage.setItem("hsq_
 // 클라우드 공유: 기존 클라우드 학습과 병합(중복 제거) 후 업로드 → 덮어쓰기로 인한 유실·중복 방지
 function shareLearn(key,cb){
   if(cb)cb("클라우드 학습 불러오는 중…");
-  return fetchT("/api/pricedata",{},20000).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
-    .then(function(meta){var u=meta&&meta.learnUrl;if(!u)return null;
-      return fetch(u+(u.indexOf("?")>=0?"&":"?")+"v="+Date.now()).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});})
-    .then(function(cloud){
-      LEARN=dedupLearn((Array.isArray(cloud)?cloud:[]).concat(LEARN)).slice(0,200);
-      saveLearnLocal();
-      if(cb)cb("클라우드 업로드 중…");
-      return uploadData("data/learn_examples.json",JSON.stringify(LEARN),key,"application/json");
-    });
+  return fetchGz("/api/getdata?f=learn").then(function(cloud){
+    LEARN=dedupLearn((Array.isArray(cloud)?cloud:[]).concat(LEARN)).slice(0,1000);
+    saveLearnLocal();
+    if(cb)cb("클라우드 업로드 중…");
+    return uploadData("data/learn_examples.json",JSON.stringify(LEARN),key,"application/json");
+  });
 }
 // ===== 거래처별 정규화 사전 (고객 표기/부품번호 → 우리 표준품·코드) =====
 // few-shot(40개 제한)과 별개인 '조회 테이블'. 거래처마다 수천 개까지 누적 가능 → 많을수록 커버리지↑
@@ -302,23 +299,30 @@ function deepMerge(t,s){if(!s||typeof s!=="object")return t;for(var k in s){var 
 var PRICE_HISTORY=null, HIST_IDX=null, PRICE_SRC={src:"",ts:null};
 function applyPH(j,src,ts){PRICE_HISTORY=j;PRICE_SRC={src:src,ts:ts||null};buildHistIndex();if(state.tab==="run"){runPipeline();renderRun();}else if(state.tab==="config"){renderCfg();}}
 function loadBundledPH(){fetch("price_history.json").then(function(r){return r.ok?r.json():null;}).then(function(j){if(j)applyPH(j,"bundled",null);}).catch(function(){});}
+// 서버 프록시(/api/getdata)에서 gzip 데이터를 받아 해제·파싱(평문 JSON도 호환)
+function fetchGz(url){
+  return fetchT(url,{},30000).then(function(r){return r.ok?r.arrayBuffer():null;}).then(function(ab){
+    if(!ab||!ab.byteLength)return null;
+    try{return JSON.parse(new TextDecoder("utf-8").decode(new Uint8Array(ab)));}catch(e){}
+    return loadPako().then(function(pako){try{return JSON.parse(pako.ungzip(new Uint8Array(ab),{to:"string"}));}catch(e2){return null;}});
+  }).catch(function(){return null;});
+}
 function loadPriceHistory(){
   // 클라우드(Vercel Blob)에 업로드된 최신 데이터가 있으면 우선 사용, 없으면 기본 번들
   fetchT("/api/pricedata",{},20000).then(function(r){return r.ok?r.json():null;}).then(function(meta){
-    if(meta&&meta.learnUrl)loadLearnCloud(meta.learnUrl); // 공유 학습 예시 동기화
+    if(meta&&meta.learnUrl)loadLearnCloud(); // 공유 학습 예시 동기화
     if(meta&&meta.url){
-      var u=meta.url+(meta.url.indexOf("?")>=0?"&":"?")+"v="+encodeURIComponent(meta.updatedAt||Date.now());
-      return fetch(u).then(function(r){return r.ok?r.json():null;}).then(function(j){if(j){applyPH(j,"cloud",meta.updatedAt);return true;}return false;});
+      return fetchGz("/api/getdata?f=price_history").then(function(j){if(j){applyPH(j,"cloud",meta.updatedAt);return true;}return false;});
     }
     return false;
   }).catch(function(){return false;}).then(function(ok){if(!ok)loadBundledPH();});
 }
 // 클라우드 공유 학습 예시를 불러와 합침(클라우드 우선, 로컬 추가분 유지)
-function loadLearnCloud(url){
-  fetch(url+(url.indexOf("?")>=0?"&":"?")+"v="+Date.now()).then(function(r){return r.ok?r.json():null;}).then(function(arr){
+function loadLearnCloud(){
+  fetchGz("/api/getdata?f=learn").then(function(arr){
     if(!Array.isArray(arr))return;
-    LEARN=dedupLearn(arr.concat(LEARN)).slice(0,200);saveLearnLocal();if(state.tab==="config")renderCfg();
-  }).catch(function(){});
+    LEARN=dedupLearn(arr.concat(LEARN)).slice(0,1000);saveLearnLocal();if(state.tab==="config")renderCfg();
+  });
 }
 // ===== 거래내역 엑셀 → 가격데이터 재생성 (브라우저, 파이썬 빌드와 동일 로직) =====
 var MAT_ORDER=[["VITON","FKM"],["바이톤","FKM"],["FKM","FKM"],["EPDM","EPDM"],["SILICONE","SILICON"],["SILICON","SILICON"],["실리콘","SILICON"],["우레탄","PU"],["URETHANE","PU"],["PTFE","PTFE"],["테프론","PTFE"],["TEFLON","PTFE"],["POM","POM"],["NYLON","NYLON"],["나일론","NYLON"],["페놀","PHENOLIC"],["HNBR","HNBR"],["NBR","NBR"],["니트릴","NBR"]];
@@ -412,15 +416,9 @@ function uploadData(pathname,data,adminKey,ctype,onProg){
       .then(function(r){return r.text().then(function(t){var j;try{j=JSON.parse(t);}catch(e){j={error:"서버 응답 오류(HTTP "+r.status+")"};}if(!r.ok||j.error)throw new Error(j.error||("HTTP "+r.status));if(onProg)onProg(100);return j.url;});});
   });
 }
-// 클라우드에 보관된 원본 거래내역(누적) 불러오기
-function fetchRawRows(rawUrl){
-  if(!rawUrl)return Promise.resolve([]);
-  return fetch(rawUrl+(rawUrl.indexOf("?")>=0?"&":"?")+"v="+Date.now()).then(function(r){return r.ok?r.arrayBuffer():null;}).then(function(ab){
-    if(!ab)return [];
-    // 신버전은 평문 JSON, 구버전은 gzip — 둘 다 지원
-    try{return JSON.parse(new TextDecoder("utf-8").decode(new Uint8Array(ab)));}catch(e){}
-    return loadPako().then(function(pako){try{return JSON.parse(pako.ungzip(new Uint8Array(ab),{to:"string"}));}catch(e2){return [];}});
-  }).catch(function(){return [];});
+// 클라우드에 보관된 원본 거래내역(누적) 불러오기 — 서버 프록시 경유
+function fetchRawRows(){
+  return fetchGz("/api/getdata?f=raw_rows").then(function(j){return Array.isArray(j)?j:[];});
 }
 function normRows(raw){var out=[];for(var i=1;i<raw.length;i++){var r=raw[i];if(!r)continue;var dt=excelDateB(r[3]);out.push([r[0]==null?"":r[0],r[1]==null?"":r[1],r[2]==null?"":r[2],dt?dt.ymd:(r[3]==null?"":String(r[3])),r[4]==null?"":r[4],r[5]==null?"":r[5],r[6]==null?"":r[6]]);}return out;}
 // 전체 누적 엑셀을 통째로 업로드 -> 지난 저장본과 비교해 증분 자동 감지 -> 가격데이터 재생성 -> 클라우드 저장
@@ -433,7 +431,7 @@ function rebuildFromFile(file,adminKey,st){
       var h=(raw[0]||[]).join(",");if(h.indexOf("거래구분")<0||h.indexOf("품목단가")<0)throw new Error("열 형식이 달라요. (품목코드·품목명·거래처명·날짜·거래구분·품목수량·품목단가 필요)");
       var newRows=normRows(raw);
       st("지난 저장본과 비교해 증분 확인 중…");
-      return getMeta().then(function(meta){return fetchRawRows(meta&&meta.rawUrl);}).then(function(oldRows){
+      return fetchRawRows().then(function(oldRows){
         var added=newRows.length,note;
         if(oldRows.length){
           var seen={},k;for(k=0;k<oldRows.length;k++)seen[oldRows[k].join("")]=1;
@@ -1663,8 +1661,8 @@ function renderCfg(){
       if(st)st.textContent=lines.join("\n");
       // 저장돼 있으면 실제로 그 파일을 받아올 수 있는지까지 확인(현재 데이터가 안 바뀌는 원인 추적)
       if(meta.url){
-        fetch(meta.url+(meta.url.indexOf("?")>=0?"&":"?")+"v="+Date.now()).then(function(r){
-          lines.push("데이터 파일 받기: "+(r.ok?"✅ 정상 — 새로고침하면 반영됩니다":("❌ 실패(HTTP "+r.status+") — 저장은 됐으나 파일 접근이 막힘(Private 설정 가능)")));
+        fetchT("/api/getdata?f=price_history",{},30000).then(function(r){
+          lines.push("데이터 파일 받기: "+(r.ok?"✅ 정상 — 새로고침하면 반영됩니다":("❌ 실패(HTTP "+r.status+")")));
           if(st)st.textContent=lines.join("\n");
         }).catch(function(){lines.push("데이터 파일 받기: ❌ 네트워크 실패");if(st)st.textContent=lines.join("\n");});
       }
@@ -1726,7 +1724,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v37";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v38";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
