@@ -383,7 +383,18 @@ function uploadBlob(pathname,data,ctype,adminKey,onProg){
     if(meta&&meta.configured===false)throw new Error("클라우드 저장소(Vercel Blob)가 아직 연결되지 않았습니다. Vercel 프로젝트 → Storage에서 Blob 저장소를 연결(Connect)하고 Redeploy 하세요. 그 전에도 인식·견적은 기본 데이터로 정상 동작합니다.");
     return import("https://esm.sh/@vercel/blob@0.27/client").then(function(mod){
       return mod.upload(pathname,new Blob([data],{type:ctype}),{access:"public",handleUploadUrl:"/api/pricedata",clientPayload:String(adminKey||""),onUploadProgress:function(p){if(onProg)onProg(p.percentage);}});
-    }).then(function(b){return b.url;});
+    }).then(function(b){return b.url;}).catch(function(e){
+      var msg=(e&&e.message)||String(e);
+      // 'client token' 류 오류는 원인이 애매 → 서버 상태로 정확히 판별해 안내
+      if(/token/i.test(msg)){
+        return getMeta().then(function(m){var env=(m&&m.env)||{};
+          if(!env.hasBlob)throw new Error("Vercel Blob이 아직 반영되지 않았습니다. Blob 연결 후 반드시 Redeploy 하세요.");
+          if(!env.hasAdmin)throw new Error("서버에 DATA_ADMIN_KEY(관리자 비밀번호)가 없습니다. Vercel 환경변수에 추가하고 Redeploy 하세요.");
+          throw new Error("관리자 비밀번호가 서버 값(DATA_ADMIN_KEY)과 다릅니다. 대소문자·공백까지 똑같이 입력하세요. 값을 모르면 Vercel → Environment Variables에서 DATA_ADMIN_KEY를 새 값으로 바꿔 저장 → Redeploy 후 그 값을 입력하세요.");
+        });
+      }
+      throw e;
+    });
   });
 }
 // 클라우드에 보관된 원본 거래내역(누적) 불러오기
@@ -1661,7 +1672,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v30";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v31";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
