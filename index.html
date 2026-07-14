@@ -1639,10 +1639,20 @@ function renderCfg(){
         "Vercel Blob(저장소): "+ok(e.hasBlob)+(meta.configured?"":"  ← 이게 없으면 저장 불가"),
         "관리자키(DATA_ADMIN_KEY): "+ok(e.hasAdmin),
         "AI키(ANTHROPIC_API_KEY): "+ok(e.hasApi)];
+      lines.push("");
+      lines.push("저장된 가격데이터: "+(meta.url?("✅ 있음 · "+(meta.updatedAt?new Date(meta.updatedAt).toLocaleString("ko-KR"):"")):"❌ 없음(아직 업로드 안 됨)"));
+      lines.push("저장된 학습데이터: "+(meta.learnUrl?"✅ 있음":"— 없음"));
       if(!e.hasBlob)lines.push("","→ Vercel Storage에서 Blob 연결 후 Redeploy가 필요합니다.");
       else if(!e.hasAdmin)lines.push("","→ Blob은 연결됨. DATA_ADMIN_KEY 환경변수를 추가하고 Redeploy 하세요.");
-      else lines.push("","→ 준비 완료. 위에서 업로드하면 됩니다.");
+      else if(!meta.url)lines.push("","→ 저장소는 연결됨. 위에서 엑셀을 업로드하면 저장됩니다.");
       if(st)st.textContent=lines.join("\n");
+      // 저장돼 있으면 실제로 그 파일을 받아올 수 있는지까지 확인(현재 데이터가 안 바뀌는 원인 추적)
+      if(meta.url){
+        fetch(meta.url+(meta.url.indexOf("?")>=0?"&":"?")+"v="+Date.now()).then(function(r){
+          lines.push("데이터 파일 받기: "+(r.ok?"✅ 정상 — 새로고침하면 반영됩니다":("❌ 실패(HTTP "+r.status+") — 저장은 됐으나 파일 접근이 막힘(Private 설정 가능)")));
+          if(st)st.textContent=lines.join("\n");
+        }).catch(function(){lines.push("데이터 파일 받기: ❌ 네트워크 실패");if(st)st.textContent=lines.join("\n");});
+      }
     }).catch(function(err){if(st)st.textContent="확인 실패: "+((err&&err.message)||err);});
   };
   var upBtn=pane.querySelector("#upBtn");
@@ -1699,7 +1709,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v34";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v35";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
