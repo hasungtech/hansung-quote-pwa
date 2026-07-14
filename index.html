@@ -110,8 +110,8 @@ function learnFix(i){
   var guess=[r.raw.category,r.raw.type,(r.raw.id!=null?r.raw.id+"x"+r.raw.od+(r.raw.h!=null?"x"+r.raw.h:""):""),r.raw.material,(r.raw.qty?r.raw.qty+"개":"")].filter(function(x){return x;}).join(" ");
   var out=window.prompt("올바른 표준 형식을 입력하면 학습합니다.\n형식: 품명 타입 내경x외경x높이 재질 수량개\n예) OIL SEAL TC 50x65x9 NBR 30개\n\n원문: "+inp, guess);
   if(out==null)return;out=out.trim();if(!out)return;
-  LEARN.unshift({in:inp,out:out});saveLearnLocal();
-  showInfo("학습 저장 완료","예시로 저장했습니다. 다음부터 같은 형태를 이렇게 인식합니다.\n\n설정 탭 → '인식 학습'에서 ☁클라우드 공유 저장을 누르면 전 직원에게 반영됩니다.");
+  var n=addLearn([{in:inp,out:out}]);
+  showInfo("학습 저장 "+(n?"완료":"생략"),n?"예시로 저장했습니다. 다음부터 같은 형태를 이렇게 인식합니다.\n\n설정 탭 → '인식 학습'에서 ☁클라우드 공유 저장을 누르면 전 직원에게 반영됩니다.":"이미 등록된 예시라 중복 저장하지 않았습니다.");
 }
 function aiParseText(btn,auto){
   var ta=document.getElementById("ta"),t=((ta?ta.value:state.text)||"").trim();
@@ -202,7 +202,29 @@ function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;
 var APP_KEY="";try{APP_KEY=localStorage.getItem("hsq_appkey")||"";}catch(e){}
 // 인식 학습 예시(교정 few-shot) — 로컬 보관, 클라우드(공유)에서 불러오면 합쳐짐
 var LEARN=[];try{LEARN=JSON.parse(localStorage.getItem("hsq_learn")||"[]")||[];}catch(e){LEARN=[];}
-function saveLearnLocal(){try{localStorage.setItem("hsq_learn",JSON.stringify(LEARN.slice(0,200)));}catch(e){}}
+// 학습 예시 중복 판정 키: 공백 접힘 + 대소문자 무시(입력·출력 모두). 사실상 같은 예시는 1건으로 취급
+function learnKey(e){var i=String((e&&e.in)||"").replace(/\s+/g," ").trim().toUpperCase();var o=String((e&&e.out)||"").replace(/\s+/g," ").trim().toUpperCase();return i+"=>"+o;}
+function dedupLearn(arr){var seen={},out=[];(arr||[]).forEach(function(e){if(!e||!e.out)return;var k=learnKey(e);if(k==="=>"||seen[k])return;seen[k]=1;out.push({in:e.in||"",out:e.out||""});});return out;}
+// 모든 학습 추가는 이 함수를 거침 → 중복이면 건너뜀. 추가된 건수 반환
+function addLearn(entries){
+  var seen={};LEARN.forEach(function(e){seen[learnKey(e)]=1;});
+  var added=0;(entries||[]).forEach(function(e){if(!e||!e.out)return;var k=learnKey(e);if(k==="=>"||seen[k])return;seen[k]=1;LEARN.unshift({in:e.in||"",out:e.out||""});added++;});
+  if(added)saveLearnLocal();return added;
+}
+function saveLearnLocal(){try{LEARN=dedupLearn(LEARN);localStorage.setItem("hsq_learn",JSON.stringify(LEARN.slice(0,200)));}catch(e){}}
+// 클라우드 공유: 기존 클라우드 학습과 병합(중복 제거) 후 업로드 → 덮어쓰기로 인한 유실·중복 방지
+function shareLearn(key,cb){
+  if(cb)cb("클라우드 학습 불러오는 중…");
+  return fetchT("/api/pricedata",{},20000).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
+    .then(function(meta){var u=meta&&meta.learnUrl;if(!u)return null;
+      return fetch(u+(u.indexOf("?")>=0?"&":"?")+"v="+Date.now()).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});})
+    .then(function(cloud){
+      LEARN=dedupLearn((Array.isArray(cloud)?cloud:[]).concat(LEARN)).slice(0,200);
+      saveLearnLocal();
+      if(cb)cb("클라우드 업로드 중…");
+      return uploadBlob("data/learn_examples.json",JSON.stringify(LEARN),"application/json",key,function(){});
+    });
+}
 function fetchT(url,opts,ms){opts=opts||{};ms=ms||45000;
   if(APP_KEY)opts.headers=Object.assign({},opts.headers||{},{"x-app-key":APP_KEY});
   var ctrl=(typeof AbortController!=="undefined")?new AbortController():null;if(ctrl)opts.signal=ctrl.signal;
@@ -266,9 +288,8 @@ function loadPriceHistory(){
 // 클라우드 공유 학습 예시를 불러와 합침(클라우드 우선, 로컬 추가분 유지)
 function loadLearnCloud(url){
   fetch(url+(url.indexOf("?")>=0?"&":"?")+"v="+Date.now()).then(function(r){return r.ok?r.json():null;}).then(function(arr){
-    if(!Array.isArray(arr))return;var seen={},out=[];
-    arr.concat(LEARN).forEach(function(e){if(!e||!e.out)return;var k=(e.in||"")+"=>"+(e.out||"");if(seen[k])return;seen[k]=1;out.push({in:e.in||"",out:e.out||""});});
-    LEARN=out.slice(0,200);saveLearnLocal();if(state.tab==="config")renderCfg();
+    if(!Array.isArray(arr))return;
+    LEARN=dedupLearn(arr.concat(LEARN)).slice(0,200);saveLearnLocal();if(state.tab==="config")renderCfg();
   }).catch(function(){});
 }
 // ===== 거래내역 엑셀 → 가격데이터 재생성 (브라우저, 파이썬 빌드와 동일 로직) =====
@@ -1223,16 +1244,20 @@ function openLearnReview(){
   props.sort(function(a,b){return rank[a.conf]-rank[b.conf];});
   window.__corr=props;
   var badge={high:'<span style="color:var(--green);font-weight:700">정확</span>',med:'<span style="color:#b8860b;font-weight:700">유사·보정</span>',low:'<span style="color:var(--accent);font-weight:700">확인필요</span>'};
+  // 이미 학습된 예시는 중복 방지: 기본 선택 해제 + '학습됨' 표시
+  var haveSet={};LEARN.forEach(function(e){haveSet[learnKey(e)]=1;});
+  var nDup=0;props.forEach(function(p){p.learned=!!haveSet[learnKey({in:p.in,out:p.out})];if(p.learned)nDup++;});
   var rows=props.map(function(p,i){
-    var chk=p.conf==="high"?" checked":"";
+    var chk=(p.conf==="high"&&!p.learned)?" checked":"";
     var vtag=p.vendor?'<span style="color:var(--accent);font-size:11px">🏢 '+esc(p.vendor)+'</span> ':'';
-    return '<div style="padding:8px 0;border-top:1px solid var(--line)"><label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer"><input type="checkbox" class="crChk" data-i="'+i+'"'+chk+' style="margin-top:3px">'
-      +'<span style="flex:1;font-size:12.5px">'+vtag+'<span class="mut">원문:</span> '+esc(p.in)+'  '+badge[p.conf]+'<br><span class="mut" style="font-size:11px">'+esc(p.ev)+'</span></span></label>'
+    var dtag=p.learned?' <span style="color:var(--muted);font-size:11px">· 이미 학습됨</span>':'';
+    return '<div style="padding:8px 0;border-top:1px solid var(--line)'+(p.learned?';opacity:.6':'')+'"><label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer"><input type="checkbox" class="crChk" data-i="'+i+'"'+chk+' style="margin-top:3px">'
+      +'<span style="flex:1;font-size:12.5px">'+vtag+'<span class="mut">원문:</span> '+esc(p.in)+'  '+badge[p.conf]+dtag+'<br><span class="mut" style="font-size:11px">'+esc(p.ev)+'</span></span></label>'
       +'<div style="margin-top:4px;padding-left:26px"><span class="mut" style="font-size:11px">정답(표준줄, 수정 가능):</span><input class="crOut" data-i="'+i+'" value="'+esc(p.out)+'" style="width:100%;margin-top:2px"></div></div>';
   }).join("");
-  var nHigh=props.filter(function(p){return p.conf==="high";}).length;
+  var nHigh=props.filter(function(p){return p.conf==="high"&&!p.learned;}).length;
   host.innerHTML='<div class="modal-bd" id="crBd"><div class="modal"><h2>자동 교정 검토</h2>'
-    +'<div class="hint" style="margin-top:0">인식 결과를 거래·견적 이력과 대조했습니다. <b>정확</b>=코드/치수·재질 일치(자동 선택), <b>유사·보정</b>=치수가 살짝 달라 이력의 정확 치수로 보정 제안(원문→보정 표시, 확인 후 체크), <b>확인필요</b>=매칭 없음. 체크한 "정답 표준줄"이 학습됩니다. 정확 일치 '+nHigh+'건 기본 선택됨.</div>'
+    +'<div class="hint" style="margin-top:0">인식 결과를 거래·견적 이력과 대조했습니다. <b>정확</b>=코드/치수·재질 일치(자동 선택), <b>유사·보정</b>=치수가 살짝 달라 이력의 정확 치수로 보정 제안(원문→보정 표시, 확인 후 체크), <b>확인필요</b>=매칭 없음. 체크한 "정답 표준줄"이 학습됩니다. 정확 일치 '+nHigh+'건 기본 선택됨'+(nDup?(' · 이미 학습된 '+nDup+'건은 자동 제외(중복 방지)'):'')+'.</div>'
     +'<div style="max-height:50vh;overflow:auto;margin-top:8px">'+rows+'</div>'
     +'<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12.5px"><input type="checkbox" id="crShare"> 저장 후 클라우드 공유(관리자) — 전 직원 반영</label>'
     +'<div class="flx" style="margin-top:10px"><button class="run" id="crSave" style="flex:1">선택 항목 학습 저장</button><button class="fbtn" id="crCancel">닫기</button></div>'
@@ -1240,26 +1265,24 @@ function openLearnReview(){
   document.getElementById("crCancel").onclick=function(){host.innerHTML="";};
   document.getElementById("crBd").onclick=function(e){if(e.target.id==="crBd")host.innerHTML="";};
   document.getElementById("crSave").onclick=function(){
-    var picked=[],seen={};
+    var picked=[];
     Array.prototype.forEach.call(host.querySelectorAll(".crChk"),function(c){
       if(!c.checked)return;var i=c.getAttribute("data-i");
       var outEl=host.querySelector('.crOut[data-i="'+i+'"]');var out=outEl?outEl.value.trim():"";var inp=window.__corr[i].in;
-      if(!out)return;var k=inp+"=>"+out;if(seen[k])return;seen[k]=1;picked.push({in:inp,out:out});
+      if(!out)return;picked.push({in:inp,out:out});
     });
     var m=document.getElementById("crMsg");
     if(!picked.length){if(m)m.textContent="선택된 항목이 없습니다.";return;}
-    // dedup against existing LEARN
-    var have={};LEARN.forEach(function(e){have[(e.in||"")+"=>"+(e.out||"")]=1;});
-    var added=0;picked.forEach(function(p){var k=p.in+"=>"+p.out;if(have[k])return;have[k]=1;LEARN.unshift({in:p.in,out:p.out});added++;});
-    saveLearnLocal();
+    // 중복 자동 제거(정규화 키) — 이미 학습된 예시는 건너뜀
+    var added=addLearn(picked);
     var share=document.getElementById("crShare");
     if(share&&share.checked){
       var key=APP_KEY||window.prompt("관리자 비밀번호(DATA_ADMIN_KEY):")||"";
-      if(key){if(m)m.textContent=added+"건 저장됨 · 클라우드 업로드 중…";
-        uploadBlob("data/learn_examples.json",JSON.stringify(LEARN),"application/json",key,function(){}).then(function(){host.innerHTML="";showInfo("학습 저장 완료",added+"건을 학습하고 클라우드에 공유했습니다. 전 직원에게 반영됩니다.");}).catch(function(e){if(m)m.textContent="로컬 저장됨("+added+"건). 클라우드 실패: "+((e&&e.message)||e);});
+      if(key){if(m)m.textContent=added+"건 저장됨 · 클라우드 병합 중…";
+        shareLearn(key,function(s){if(m)m.textContent=added+"건 저장됨 · "+s;}).then(function(){host.innerHTML="";showInfo("학습 저장 완료",added+"건을 학습하고 클라우드에 병합 공유했습니다(중복 제거). 전 직원에게 반영됩니다.");}).catch(function(e){if(m)m.textContent="로컬 저장됨("+added+"건). 클라우드 실패: "+((e&&e.message)||e);});
         return;}
     }
-    host.innerHTML="";showInfo("학습 저장 완료",added+"건을 학습했습니다."+(added<picked.length?(" ("+(picked.length-added)+"건은 이미 등록됨)"):"")+"\n\n다음 인식부터 같은 형태를 이렇게 읽습니다. 설정 → 인식 학습에서 ☁공유하면 전 직원 반영.");
+    host.innerHTML="";showInfo(added?"학습 저장 완료":"모두 중복",added?(added+"건을 학습했습니다."+(added<picked.length?(" ("+(picked.length-added)+"건은 이미 등록되어 제외)"):"")+"\n\n다음 인식부터 같은 형태를 이렇게 읽습니다. 설정 → 인식 학습에서 ☁공유하면 전 직원 반영."):"선택한 "+picked.length+"건이 모두 이미 학습된 예시라 추가하지 않았습니다.");
   };
 }
 
@@ -1389,10 +1412,10 @@ function renderCfg(){
   var akBtn=pane.querySelector("#appKeySave");
   if(akBtn)akBtn.onclick=function(){var v=(pane.querySelector("#appKey")||{}).value||"";APP_KEY=v.trim();window.__authNotified=0;try{APP_KEY?localStorage.setItem("hsq_appkey",APP_KEY):localStorage.removeItem("hsq_appkey");}catch(e){}var m=pane.querySelector("#appKeyMsg");if(m)m.textContent="저장됨. 데이터를 다시 불러옵니다…";loadPriceHistory();};
   var lnAdd=pane.querySelector("#lnAdd");
-  if(lnAdd)lnAdd.onclick=function(){var i=((pane.querySelector("#lnIn")||{}).value||"").trim(),o=((pane.querySelector("#lnOut")||{}).value||"").trim();var m=pane.querySelector("#lnMsg");if(!o){if(m)m.textContent="올바른 결과를 입력하세요.";return;}LEARN.unshift({in:i,out:o});saveLearnLocal();renderCfg();};
+  if(lnAdd)lnAdd.onclick=function(){var i=((pane.querySelector("#lnIn")||{}).value||"").trim(),o=((pane.querySelector("#lnOut")||{}).value||"").trim();var m=pane.querySelector("#lnMsg");if(!o){if(m)m.textContent="올바른 결과를 입력하세요.";return;}var n=addLearn([{in:i,out:o}]);if(n){renderCfg();}else if(m){m.textContent="이미 등록된 예시입니다(중복 저장 안 함).";}};
   Array.prototype.forEach.call(pane.querySelectorAll(".lnDel"),function(b){b.onclick=function(){var i=parseInt(b.getAttribute("data-i"),10);if(i>=0){LEARN.splice(i,1);saveLearnLocal();renderCfg();}};});
   var lnShare=pane.querySelector("#lnShare");
-  if(lnShare)lnShare.onclick=function(){var key=APP_KEY||window.prompt("관리자 비밀번호(DATA_ADMIN_KEY):")||"";var m=pane.querySelector("#lnMsg");if(!key){if(m)m.textContent="관리자 비밀번호가 필요합니다.";return;}if(m)m.textContent="클라우드 업로드 중…";uploadBlob("data/learn_examples.json",JSON.stringify(LEARN),"application/json",key,function(){}).then(function(){if(m)m.textContent="✅ 클라우드에 공유 저장됨. 전 직원에게 반영됩니다.";}).catch(function(e){if(m)m.textContent="실패: "+((e&&e.message)||e)+" (Vercel Blob 연결 필요)";});};
+  if(lnShare)lnShare.onclick=function(){var key=APP_KEY||window.prompt("관리자 비밀번호(DATA_ADMIN_KEY):")||"";var m=pane.querySelector("#lnMsg");if(!key){if(m)m.textContent="관리자 비밀번호가 필요합니다.";return;}shareLearn(key,function(s){if(m)m.textContent=s;}).then(function(){renderCfg();if(m)m.textContent="✅ 클라우드에 병합 저장됨(중복 제거). 전 직원에게 반영됩니다. 현재 "+LEARN.length+"건.";}).catch(function(e){if(m)m.textContent="실패: "+((e&&e.message)||e)+" (Vercel Blob 연결 필요)";});};
   var upBtn=pane.querySelector("#upBtn");
   if(upBtn)upBtn.onclick=function(){
     var fEl=pane.querySelector("#upFile"),f=fEl&&fEl.files&&fEl.files[0],key=(pane.querySelector("#upKey")||{}).value,st=pane.querySelector("#upStat");
@@ -1427,7 +1450,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v25";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v26";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
