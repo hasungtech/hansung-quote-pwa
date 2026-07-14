@@ -430,9 +430,14 @@ function rebuildFromFile(file,adminKey,st){
       }).then(function(o){
         var nkeys=Object.keys(o.out).length;st(o.note+" · 업로드 중(가격데이터)…");
         return uploadBlob("data/price_history.json",JSON.stringify(o.out),"application/json",adminKey,function(p){st("가격데이터 업로드 "+Math.round(p)+"%");})
-          .then(function(){st("원본 압축·백업 업로드 중…");return loadPako();})
-          .then(function(pako){return uploadBlob("data/raw_rows.json.gz",pako.gzip(JSON.stringify(o.combined)),"application/octet-stream",adminKey,function(p){st("원본 백업 업로드 "+Math.round(p)+"%");});})
-          .then(function(){return {keys:nkeys,rows:o.combined.length,note:o.note};});
+          .then(function(){
+            // 원본 백업(증분 감지용)은 부가 기능 — 실패해도 가격데이터 저장은 성공으로 처리
+            st("원본 압축·백업 업로드 중…(선택)");
+            return loadPako()
+              .then(function(pako){return uploadBlob("data/raw_rows.json.gz",pako.gzip(JSON.stringify(o.combined)),"application/octet-stream",adminKey,function(p){st("원본 백업 업로드 "+Math.round(p)+"%");});})
+              .then(function(){return true;})["catch"](function(){return false;});
+          })
+          .then(function(backupOk){return {keys:nkeys,rows:o.combined.length,note:o.note,backupOk:backupOk};});
       });
     });
   });
@@ -1646,7 +1651,7 @@ function renderCfg(){
     if(!key){set("관리자 비밀번호를 입력하세요.");return;}
     upBtn.disabled=true;
     rebuildFromFile(f,key,set).then(function(r){
-      set("✅ 완료: "+(r.note||"")+" · 품목키 "+r.keys.toLocaleString()+"개. 새 데이터를 불러옵니다…");
+      set("✅ 완료: "+(r.note||"")+" · 품목키 "+r.keys.toLocaleString()+"개."+(r.backupOk===false?" (원본 백업은 생략 — 가격데이터는 정상 저장됨)":"")+" 새 데이터를 불러옵니다…");
       upBtn.disabled=false;loadPriceHistory();
     }).catch(function(e){set("❌ 실패: "+((e&&e.message)?e.message:String(e)));upBtn.disabled=false;});
   };
@@ -1672,7 +1677,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v31";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v32";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
