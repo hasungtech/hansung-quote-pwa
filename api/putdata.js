@@ -19,10 +19,9 @@ module.exports = async function handler(req, res) {
     const pathname = String(body.pathname || "");
     if (!/^data\/[A-Za-z0-9._/-]+$/.test(pathname)) { res.status(400).json({ error: "잘못된 저장 경로입니다." }); return; }
     if (!body.dataB64) { res.status(400).json({ error: "저장할 데이터가 없습니다." }); return; }
-    let buf = Buffer.from(String(body.dataB64), "base64");
-    if (body.gz) buf = zlib.gunzipSync(buf);
-    const ctype = body.contentType || "application/json";
-    const r = await blobMod.put(pathname, buf, { access: "public", contentType: ctype, addRandomSuffix: false, allowOverwrite: true });
+    // 클라이언트가 gzip한 바이트를 '압축 상태 그대로' 비공개 저장(읽기는 /api/getdata 서버 프록시가 담당)
+    const buf = Buffer.from(String(body.dataB64), "base64");
+    const r = await blobMod.put(pathname, buf, { access: "private", contentType: "application/octet-stream", addRandomSuffix: false, allowOverwrite: true });
     res.status(200).json({ url: r.url, size: buf.length });
   } catch (e) {
     res.status(500).json({ error: String((e && e.message) || e) });
