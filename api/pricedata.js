@@ -19,11 +19,13 @@ module.exports = async function handler(req, res) {
     return;
   }
   const hasToken = !!process.env.BLOB_READ_WRITE_TOKEN;
+  // 진단용(값이 아니라 '설정 여부'만): 앱에서 연결 상태를 바로 확인
+  const envStatus = { hasBlob: hasToken, hasAdmin: !!process.env.DATA_ADMIN_KEY, hasApi: !!process.env.ANTHROPIC_API_KEY };
 
   if (req.method === "GET") {
     // GET은 데이터 위치(URL)를 노출하므로 직원 인증으로 보호(외부 유출 차단)
     if (process.env.APP_ACCESS_KEY && (req.headers["x-app-key"] || "") !== process.env.APP_ACCESS_KEY) { res.status(401).json({ error: "접근 권한이 없습니다." }); return; }
-    if (!hasToken) { res.status(200).json({ url: null, configured: false }); return; }
+    if (!hasToken) { res.status(200).json({ url: null, configured: false, env: envStatus }); return; }
     try {
       const pickNewest = (blobs) => {
         let best = null;
@@ -45,6 +47,7 @@ module.exports = async function handler(req, res) {
         rawUrl: rawBest ? rawBest.url : null,
         learnUrl: learnBest ? learnBest.url : null,
         configured: true,
+        env: envStatus,
       });
     } catch (e) {
       res.status(200).json({ url: null, configured: true, error: String(e && e.message || e) });
