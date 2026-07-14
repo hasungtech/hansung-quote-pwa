@@ -1646,10 +1646,30 @@ function renderCfg(){
   var upBtn=pane.querySelector("#upBtn");
   if(upBtn)upBtn.onclick=function(){
     var fEl=pane.querySelector("#upFile"),f=fEl&&fEl.files&&fEl.files[0],key=(pane.querySelector("#upKey")||{}).value,st=pane.querySelector("#upStat");
-    var set=function(t){if(st)st.textContent=t;};
-    if(!f){set("거래내역 엑셀(.xlsx) 파일을 선택하세요.");return;}
-    if(!key){set("관리자 비밀번호를 입력하세요.");return;}
-    upBtn.disabled=true;
+    // 텍스트에서 단계·퍼센트를 읽어 '전체 진행률' 막대로 표시(단계마다 앞으로 채워짐)
+    function overallPct(t){var m=t.match(/(\d+)\s*%/);
+      if(/완료|✅/.test(t))return 100;
+      if(/실패|❌/.test(t))return -1;
+      if(/원본 백업 업로드/.test(t)&&m)return 80+(+m[1])*0.18;
+      if(/원본 (압축|백업)/.test(t))return 80;
+      if(/가격데이터 업로드/.test(t)&&m)return 35+(+m[1])*0.45;
+      if(/업로드 중\(가격데이터\)/.test(t))return 33;
+      if(/재생성|가격데이터를 다시|가격데이터/.test(t))return 26;
+      if(/파싱/.test(t))return 16;
+      if(/읽는|읽기/.test(t))return 8;
+      return null;}
+    var lastPct=0;
+    var set=function(t){if(!st)return;var p=overallPct(t),fail=p===-1;
+      if(p!=null&&p>=0){if(p<lastPct&&p<100)p=lastPct;else lastPct=p;} // 뒤로 가지 않게
+      var w=fail?100:(p==null?Math.max(lastPct,5):p);
+      var col=fail?"var(--accent)":(p===100?"var(--green)":"var(--accent)");
+      var pctTxt=(!fail&&p!=null)?('<span style="float:right;font-variant-numeric:tabular-nums;color:'+col+'">'+Math.round(p)+'%</span>'):'';
+      st.innerHTML='<div style="font-size:12.5px;white-space:pre-wrap">'+esc(t)+pctTxt+'</div>'
+        +'<div style="height:9px;border-radius:6px;background:var(--line);overflow:hidden;margin-top:6px"><div style="height:100%;width:'+Math.max(3,Math.min(100,w))+'%;background:'+col+';border-radius:6px;transition:width .3s ease"></div></div>';
+    };
+    if(!f){if(st)st.textContent="거래내역 엑셀(.xlsx) 파일을 선택하세요.";return;}
+    if(!key){if(st)st.textContent="관리자 비밀번호를 입력하세요.";return;}
+    upBtn.disabled=true;lastPct=0;set("엑셀 읽는 중…");
     rebuildFromFile(f,key,set).then(function(r){
       set("✅ 완료: "+(r.note||"")+" · 품목키 "+r.keys.toLocaleString()+"개."+(r.backupOk===false?" (원본 백업은 생략 — 가격데이터는 정상 저장됨)":"")+" 새 데이터를 불러옵니다…");
       upBtn.disabled=false;loadPriceHistory();
@@ -1677,7 +1697,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v32";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v33";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
