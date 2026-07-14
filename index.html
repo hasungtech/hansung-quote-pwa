@@ -74,6 +74,9 @@ var TYPE_PREFIXES=["TCN","TCV","TC","SC","SB","TB","VF","VH","DSI","SKY","VA","V
 var MAT={HNBR:"HNBR","수소화니트릴":"HNBR",FFKM:"FFKM","칼레즈":"FFKM",VITON:"FKM","바이톤":"FKM","비톤":"FKM","불소고무":"FKM","불소":"FKM",FKM:"FKM",EPDM:"EPDM","에치디피엠":"EPDM",SILICONE:"SILICON",SILICON:"SILICON","실리콘":"SILICON","실리":"SILICON","폴리우레탄":"PU","우레탄":"PU","유레탄":"PU",URETHANE:"PU",POLYURETHANE:"PU",PU:"PU",PTFE:"PTFE","테프론":"PTFE",TEFLON:"PTFE","사불화":"PTFE",POM:"POM","네오프렌":"CR",NEOPRENE:"CR",CR:"CR",AFLAS:"AFLAS","아프라스":"AFLAS",NBR:"NBR","니트릴고무":"NBR","니트릴":"NBR"};
 function parseLine(line){
   var raw=line.trim(); if(!raw)return null;
+  // 문서에서 인식한 거래처(요청 업체) 태그 '@거래처명'을 분리(맨 뒤). 매칭 좁히기에 사용
+  var customer="",cm=raw.match(/@\s*([^@]+?)\s*$/);
+  if(cm){customer=cm[1].trim();raw=raw.slice(0,cm.index).trim();if(!raw)return null;}
   var u=raw.toUpperCase().replace(/[Ø⌀ΦΦ]/g,"").replace(/파이/g,"").replace(/[×✕╳⨯＊*・·•∙ㆍｘＸ]/g,"x").replace(/,(\d)/g,".$1");
   var material="",_ml=0; for(var k in MAT){if(u.indexOf(k)>=0&&k.length>_ml){material=MAT[k];_ml=k.length;}} // 가장 긴(구체적인) 키 우선
   var qty=0; var qm=raw.match(/(\d+)\s*(?:개|EA|PCS?|장|본|SET|세트)(?![A-Za-z0-9])/i)||raw.match(/수량\s*[:：]?\s*(\d+)/); if(qm)qty=parseInt(qm[1],10);
@@ -94,7 +97,7 @@ function parseLine(line){
   var hay=u+" "+raw;
   var PRODS=[[/U-?PACKING|유.?패킹|패킹/,"U-PACKING"],[/DUST ?SEAL|더스트/,"DUST SEAL"],[/BACK ?UP ?RING|백업/,"BACK UP RING"],[/WEAR(ING)?|웨어/,"WEAR RING"]];
   if(category==="OIL SEAL"){for(var pi=0;pi<PRODS.length;pi++){if(PRODS[pi][0].test(hay)){category=PRODS[pi][1];break;}}}
-  return{category:category,type:type,material:material,id:id,od:od,h:hh,qty:qty,sourceCode:sourceCode,
+  return{category:category,type:type,material:material,id:id,od:od,h:hh,qty:qty,sourceCode:sourceCode,customer:customer,
     sizeSource:(id!=null&&od!=null)?"inline":sourceCode?"codeTable":"manual",
     confidence:"low",needsReview:true,rawText:raw};
 }
@@ -624,19 +627,19 @@ function loadPdfJs(){
 // 선택 파일들을 처리 단위(task)로 전개: 이미지 1장 = 1 task, PDF = 페이지 수만큼 task
 function buildTasks(files){
   var tasks=[],chain=Promise.resolve();
-  files.forEach(function(f){
-    if(/^image\//.test(f.type)){tasks.push({kind:"image",file:f});}
+  files.forEach(function(f,fi){
+    if(/^image\//.test(f.type)){tasks.push({kind:"image",file:f,fileId:fi,firstOfFile:true});}
     else if(f.type==="application/pdf"){
       chain=chain.then(function(){
         return loadPdfJs().then(function(pdfjs){
           return f.arrayBuffer().then(function(buf){
             return pdfjs.getDocument({data:new Uint8Array(buf)}).promise.then(function(doc){
-              for(var p=1;p<=doc.numPages;p++)tasks.push({kind:"pdfpage",doc:doc,page:p});
+              for(var p=1;p<=doc.numPages;p++)tasks.push({kind:"pdfpage",doc:doc,page:p,fileId:fi,firstOfFile:p===1});
             });
           });
-        }).catch(function(e){tasks.push({kind:"error",msg:(e&&e.message)||"PDF 처리 실패"});});
+        }).catch(function(e){tasks.push({kind:"error",msg:(e&&e.message)||"PDF 처리 실패",fileId:fi,firstOfFile:true});});
       });
-    }else{tasks.push({kind:"error",msg:"지원하지 않는 형식"});}
+    }else{tasks.push({kind:"error",msg:"지원하지 않는 형식",fileId:fi,firstOfFile:true});}
   });
   return chain.then(function(){return tasks;});
 }
@@ -668,24 +671,43 @@ function postExtract(payload,attempt){
     });
 }
 function extractFromDrawings(tasks){ // 동시 4개씩, 각 task를 이미지로 변환→인식
-  var total=tasks.length,done=0,fail=0,lines=[],idx=0,active=0,CONC=4,firstError="";
+  var total=tasks.length,done=0,fail=0,idx=0,active=0,CONC=4,firstError="",out=new Array(total);
   showOcrProgress(0,total,0);
+  // 완료는 순서 무관이므로 task 순서대로 out[i]에 저장 → 문서(파일)별로 #CUST(거래처)를 이후 품목줄에 전파
+  function assemble(){
+    var lines=[],cust="";
+    for(var i=0;i<total;i++){
+      var t=tasks[i],r=out[i]||{};
+      if(t&&t.firstOfFile)cust=""; // 새 파일 시작 → 거래처 초기화
+      if(r.error||!r.text)continue;
+      r.text.split(/\r?\n/).forEach(function(l){
+        var s=l.trim();if(!s)return;
+        var cm=s.match(/^#CUST\s*[:：]?\s*(.+)$/i);
+        if(cm){cust=cm[1].trim();return;} // 거래처 줄: 품목 아님, 기억만
+        if(/^#INFO/i.test(s)){lines.push(s);return;} // 자동견적 범위 밖 요약은 그대로
+        if(cust&&s.indexOf("@")<0)s=s+"  @"+cust; // 품목줄에 거래처 태그 부착
+        lines.push(s);
+      });
+    }
+    return {text:lines.join("\n"),fail:fail,total:total,error:firstError};
+  }
   return new Promise(function(resolve){
-    function finishOne(res){
-      if(res.error){fail++;if(!firstError)firstError=res.error;}else if(res.text){lines.push(res.text);}
+    function finishOne(i,res){
+      out[i]=res;
+      if(res.error){fail++;if(!firstError)firstError=res.error;}
       done++;active--;showOcrProgress(done,total,fail);
-      if(done>=total)resolve({text:lines.join("\n"),fail:fail,total:total,error:firstError});
+      if(done>=total)resolve(assemble());
       else launch();
     }
     function launch(){
       while(active<CONC&&idx<total){
-        (function(task){
+        (function(i,task){
           active++;
           renderTask(task).then(function(rt){
-            if(rt.error){finishOne({error:rt.error});return;}
-            postExtract(rt.payload,0).then(finishOne);
+            if(rt.error){finishOne(i,{error:rt.error});return;}
+            postExtract(rt.payload,0).then(function(pr){finishOne(i,pr);});
           });
-        })(tasks[idx++]);
+        })(idx,tasks[idx]);idx++;
       }
     }
     if(total===0){resolve({text:"",fail:0,total:0,error:""});return;}
@@ -1076,8 +1098,12 @@ function normLine(it){
   if(it.qty)p.push(it.qty+"개");
   return p.join(" ");
 }
+// 거래처명 정규화·매칭(법인격/공백/기호 차이 흡수). 짧은 문자열은 오매칭 방지로 제외
+function custNorm(s){return String(s==null?"":s).toUpperCase().replace(/주식회사|\(주\)|㈜|유한회사|\(유\)|합자회사|CO\.?|LTD\.?|INC\.?|CORP\.?|상사/g,"").replace(/[\s.\-()·]/g,"");}
+function custMatch(a,b){a=custNorm(a);b=custNorm(b);if(a.length<2||b.length<2)return false;return a===b||a.indexOf(b)>=0||b.indexOf(a)>=0;}
 // 근접 치수 매칭(반올림·오타 보정용). 3치수(ID×OD×H) 품목만 — O-RING 등 2치수는 키 일치(histMatch)에 위임
-function nearHistMatch(it){
+// vendor(요청 거래처)가 있으면 같은 거래처 이력을 최우선으로 좁힘
+function nearHistMatch(it,vendor){
   if(!HIST_IDX||it.id==null||it.od==null||it.h==null)return null;
   var pool=(it.type&&HIST_IDX.byType[it.type])||HIST_IDX.byType[""]||[];
   pool=pool.filter(function(p){return p.h!=null;});
@@ -1086,43 +1112,49 @@ function nearHistMatch(it){
   for(var i=0;i<pool.length;i++){var p=pool[i];
     var d=Math.abs((p.id||0)-it.id)+Math.abs((p.od||0)-it.od)+Math.abs((p.h||0)-it.h);
     var matOk=!mat||!p.mat||String(p.mat).toUpperCase()===mat;
-    // 거리 우선, 같으면 재질 일치 우선
-    if(!best||d<best.d||(d===best.d&&matOk&&!best.matOk))best={p:p,d:d,matOk:matOk};
+    var cOk=!!vendor&&custMatch(vendor,p.cust);
+    // 점수: 거래처 일치는 강하게 우대(치수 거리보다 우선), 그 다음 거리, 그 다음 재질
+    var score=d-(cOk?1000:0)-(matOk?0.1:0);
+    if(!best||score<best.score)best={p:p,d:d,matOk:matOk,cOk:cOk,score:score};
   }
   if(!best)return null;
   return {dim:nm(best.p.id)+"×"+nm(best.p.od)+(best.p.h!=null?"×"+nm(best.p.h):""),
-    id:best.p.id,od:best.p.od,h:best.p.h,mat:best.p.mat,price:best.p.price,code:best.p.code,cust:best.p.cust,date:best.p.date,d:best.d,matOk:best.matOk};
+    id:best.p.id,od:best.p.od,h:best.p.h,mat:best.p.mat,price:best.p.price,code:best.p.code,cust:best.p.cust,date:best.p.date,d:best.d,matOk:best.matOk,cOk:best.cOk};
 }
 // 결과 1건 → 교정 제안(정답 후보 + 신뢰도 + 근거). 매칭 근거가 강할수록 신뢰도↑
 function corrProposal(r){
-  var it=r.c.item,raw=(r.raw&&r.raw.rawText)||"";
+  var it=r.c.item,raw=(r.raw&&r.raw.rawText)||"",vendor=(r.raw&&r.raw.customer)||"";
   if(!raw)return null;
   var H=r.hist;
   // 1) 코드/치수+재질 정확 일치(가격 이력 보유) — 가장 신뢰
   if(H&&H.hasPrice){
-    var s0=(H.samples&&H.samples[0])||(H.quoSamples&&H.quoSamples[0])||null;
-    var code=s0?(s0[4]||""):"",cust=s0?(s0[2]||""):"";
-    return {in:raw,out:normLine(it),conf:"high",code:code,
-      ev:"✓ "+(H.basis||"이력")+" 일치"+(H.rec?" · "+won(H.rec)+"원":"")+(code?" · 코드 "+code:"")+(cust?" · "+cust:"")};
+    var ps=(H.samples&&H.samples.length?H.samples:(H.quoSamples||[]));
+    var s0=ps[0]||null;
+    // 같은 거래처 이력이 있으면 그 거래처의 최근 기록을 우선 근거로
+    if(vendor){for(var si=0;si<ps.length;si++){if(custMatch(vendor,ps[si][2])){s0=ps[si];break;}}}
+    var code=s0?(s0[4]||""):"",cust=s0?(s0[2]||""):"",cOk=vendor&&custMatch(vendor,cust);
+    return {in:raw,out:normLine(it),conf:"high",code:code,vendor:vendor,
+      ev:"✓ "+(H.basis||"이력")+" 일치"+(cOk?" · 거래처 일치":"")+(s0&&s0[1]?" · "+won(s0[1])+"원":(H.rec?" · "+won(H.rec)+"원":""))+(code?" · 코드 "+code:"")+(cust?" · "+cust:"")};
   }
-  // 2) 근접 치수 매칭 — 이력의 정확 치수/재질로 보정 제안(반올림·오타 흡수)
-  var nh=nearHistMatch(it),out=normLine(it);
+  // 2) 근접 치수 매칭 — 이력의 정확 치수/재질로 보정 제안(반올림·오타 흡수), 거래처 있으면 그 거래처 우선
+  var nh=nearHistMatch(it,vendor),out=normLine(it);
   if(nh){
     var corrIt={category:it.category,type:it.type,id:nh.id,od:nh.od,h:nh.h,material:nh.mat||it.material,qty:it.qty};
     var cout=normLine(corrIt),changed=cout!==out;
-    var tail=(nh.price?" · "+won(nh.price)+"원":"")+(nh.code?" · 코드 "+nh.code:"")+(nh.cust?" · "+nh.cust:"");
-    if(nh.d===0&&nh.matOk)return {in:raw,out:out,conf:"high",code:nh.code,ev:"✓ 이력과 치수·재질 일치"+tail};
+    var tail=(nh.cOk?" · 거래처 일치":"")+(nh.price?" · "+won(nh.price)+"원":"")+(nh.code?" · 코드 "+nh.code:"")+(nh.cust?" · "+nh.cust:"");
+    // 거래처 일치 + 근접(≤2mm)이면 신뢰 상향
+    if((nh.d===0&&nh.matOk)||(nh.cOk&&nh.d<=2&&nh.matOk))return {in:raw,out:(nh.d===0?out:cout),conf:"high",code:nh.code,vendor:vendor,ev:"✓ "+(nh.cOk?"거래처 이력 ":"이력 ")+(nh.d===0?"치수·재질 일치":"근접 일치(치수 보정)")+tail};
     if(nh.d<=6){
       var note=changed?("치수 보정 "+nm(it.id)+"×"+nm(it.od)+(it.h!=null?"×"+nm(it.h):"")+" → "+nh.dim):"치수 일치";
       if(!nh.matOk)note+=" · 재질 상이("+nh.mat+")";
-      return {in:raw,out:cout,conf:"med",code:nh.code,ev:"근접 이력(차이 "+nm(nh.d)+"mm) — "+note+tail};
+      return {in:raw,out:cout,conf:"med",code:nh.code,vendor:vendor,ev:"근접 이력(차이 "+nm(nh.d)+"mm) — "+note+tail};
     }
   }
   // 3) 유사 거래만 있음
-  if(r.neighbor)return {in:raw,out:out,conf:"med",ev:"유사 거래 "+r.neighbor.n+"건"+(r.neighbor.sameMat?"(동일재질)":"")+" — 확인 권장"};
+  if(r.neighbor)return {in:raw,out:out,conf:"med",vendor:vendor,ev:"유사 거래 "+r.neighbor.n+"건"+(r.neighbor.sameMat?"(동일재질)":"")+" — 확인 권장"};
   // 4) 매칭 없음
   if(!out)return null;
-  return {in:raw,out:out,conf:"low",ev:"이력 매칭 없음 — 정답을 직접 확인하세요"};
+  return {in:raw,out:out,conf:"low",vendor:vendor,ev:"이력 매칭 없음 — 정답을 직접 확인하세요"};
 }
 function openLearnReview(){
   var host=document.getElementById("modalHost");if(!host)return;
@@ -1135,8 +1167,9 @@ function openLearnReview(){
   var badge={high:'<span style="color:var(--green);font-weight:700">정확</span>',med:'<span style="color:#b8860b;font-weight:700">유사·보정</span>',low:'<span style="color:var(--accent);font-weight:700">확인필요</span>'};
   var rows=props.map(function(p,i){
     var chk=p.conf==="high"?" checked":"";
+    var vtag=p.vendor?'<span style="color:var(--accent);font-size:11px">🏢 '+esc(p.vendor)+'</span> ':'';
     return '<div style="padding:8px 0;border-top:1px solid var(--line)"><label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer"><input type="checkbox" class="crChk" data-i="'+i+'"'+chk+' style="margin-top:3px">'
-      +'<span style="flex:1;font-size:12.5px"><span class="mut">원문:</span> '+esc(p.in)+'  '+badge[p.conf]+'<br><span class="mut" style="font-size:11px">'+esc(p.ev)+'</span></span></label>'
+      +'<span style="flex:1;font-size:12.5px">'+vtag+'<span class="mut">원문:</span> '+esc(p.in)+'  '+badge[p.conf]+'<br><span class="mut" style="font-size:11px">'+esc(p.ev)+'</span></span></label>'
       +'<div style="margin-top:4px;padding-left:26px"><span class="mut" style="font-size:11px">정답(표준줄, 수정 가능):</span><input class="crOut" data-i="'+i+'" value="'+esc(p.out)+'" style="width:100%;margin-top:2px"></div></div>';
   }).join("");
   var nHigh=props.filter(function(p){return p.conf==="high";}).length;
@@ -1336,7 +1369,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v23";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v24";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
