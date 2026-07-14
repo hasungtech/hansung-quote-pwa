@@ -225,6 +225,34 @@ function shareLearn(key,cb){
       return uploadBlob("data/learn_examples.json",JSON.stringify(LEARN),"application/json",key,function(){});
     });
 }
+// ===== 거래처별 정규화 사전 (고객 표기/부품번호 → 우리 표준품·코드) =====
+// few-shot(40개 제한)과 별개인 '조회 테이블'. 거래처마다 수천 개까지 누적 가능 → 많을수록 커버리지↑
+var NORMAP={};try{NORMAP=JSON.parse(localStorage.getItem("hsq_normap")||"{}")||{};}catch(e){NORMAP={};}
+function saveNormap(){try{var ks=Object.keys(NORMAP);if(ks.length>20000){var keep={},sl=ks.slice(ks.length-20000);sl.forEach(function(k){keep[k]=NORMAP[k];});NORMAP=keep;}localStorage.setItem("hsq_normap",JSON.stringify(NORMAP));}catch(e){}}
+var _MATW={NBR:1,FKM:1,EPDM:1,SILICON:1,SILICONE:1,PU:1,PTFE:1,HNBR:1,FFKM:1,CR:1,VITON:1,SI:1,FPM:1};
+// 고객이 쓴 식별자(부품번호·모델명 등) 토큰 추출: 숫자 포함 영숫자, 순수치수·재질어 제외
+function custTokens(raw){
+  var u=String(raw||"").toUpperCase().replace(/@[^@]*$/,"").replace(/[×＊*·]/g,"X");
+  var m=u.match(/[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*/g)||[],out=[],seen={};
+  for(var i=0;i<m.length;i++){var t=m[i];if(t.length<3)continue;if(!/\d/.test(t))continue;if(_MATW[t.replace(/-/g,"")])continue;
+    var nonX=t.replace(/[^A-WYZ]/g,"");if(nonX.length<2)continue; // 치수조각(X65X9 등)·순수숫자 제외: 실제 글자 2개 이상인 식별자만
+    var tt=t.replace(/-/g,"");if(seen[tt])continue;seen[tt]=1;out.push(t);}
+  return out.slice(0,6);
+}
+// 학습: (거래처 + 고객토큰) → 우리 표준줄/코드 저장
+function learnNormap(vendor,raw,out,code){
+  if(!vendor||!out)return 0;var cn=custNorm(vendor);if(cn.length<2)return 0;
+  var toks=custTokens(raw);if(!toks.length)return 0;var added=0;
+  toks.forEach(function(t){var k=cn+"§"+t.replace(/-/g,"");if(!NORMAP[k]){NORMAP[k]={out:out,code:code||"",t:t,c:String(vendor).slice(0,20)};added++;}else{NORMAP[k].out=out;if(code)NORMAP[k].code=code;}});
+  if(added)saveNormap();return added;
+}
+// 조회: 거래처 + 원문의 고객토큰으로 과거 표준화 찾기
+function normapLookup(vendor,raw){
+  if(!vendor)return null;var cn=custNorm(vendor);if(cn.length<2)return null;
+  var toks=custTokens(raw);for(var i=0;i<toks.length;i++){var k=cn+"§"+toks[i].replace(/-/g,"");if(NORMAP[k])return NORMAP[k];}
+  return null;
+}
+function normapCount(){return Object.keys(NORMAP).length;}
 function fetchT(url,opts,ms){opts=opts||{};ms=ms||45000;
   if(APP_KEY)opts.headers=Object.assign({},opts.headers||{},{"x-app-key":APP_KEY});
   var ctrl=(typeof AbortController!=="undefined")?new AbortController():null;if(ctrl)opts.signal=ctrl.signal;
@@ -764,7 +792,7 @@ function bulkProgressHTML(msg){
   var remain=BULK.files.length-BULK.i;
   return '<div style="font-size:13px;line-height:1.7">'
     +'<div><b>'+(BULK.i)+' / '+BULK.files.length+'</b> 파일 처리'+(remain>0&&BULK.running?' · 남은 '+remain+'개':'')+'</div>'
-    +'<div class="mut">인식 품목 '+s.items+' · <span style="color:var(--green)">자동 학습 '+s.learned+'</span> · 검토 대기 '+s.queued+(s.errors?' · 실패 '+s.errors:'')+'</div>'
+    +'<div class="mut">인식 품목 '+s.items+' · <span style="color:var(--green)">자동 학습 '+s.learned+'</span> · <span style="color:var(--accent)">거래처 사전 +'+(s.map||0)+'</span> · 검토 대기 '+s.queued+(s.errors?' · 실패 '+s.errors:'')+'</div>'
     +(msg?'<div class="mut" style="font-size:11.5px;margin-top:2px">'+esc(msg)+'</div>':'')+'</div>';
 }
 function bulkRender(msg){
@@ -780,11 +808,14 @@ function bulkNext(){
   processOneFileForLearn(f,BULK.model).then(function(text){
     var props=parseText(text).map(processItem).map(corrProposal).filter(Boolean);
     var norm=function(s){return String(s||"").replace(/\s+/g," ").trim().toUpperCase();};
-    var toLearn=[],queued=0;
+    var toLearn=[],queued=0,mapAdd=0;
     props.forEach(function(p){
-      if(p.conf==="high"&&norm(p.in)!==norm(p.out))toLearn.push({in:p.in,out:p.out}); // 확실한 교정만 자동 학습
-      else if(p.conf!=="high"){BULKQ.push({in:p.in,out:p.out,conf:p.conf,vendor:p.vendor||"",ev:p.ev||""});queued++;} // 나머지는 검토 큐
+      if(p.conf==="high"){
+        if(p.vendor)mapAdd+=learnNormap(p.vendor,p.in,p.out,p.code); // 거래처 정규화 사전에 축적
+        if(norm(p.in)!==norm(p.out))toLearn.push({in:p.in,out:p.out}); // 확실한 교정만 few-shot 학습
+      } else {BULKQ.push({in:p.in,out:p.out,conf:p.conf,vendor:p.vendor||"",ev:p.ev||""});queued++;} // 나머지는 검토 큐
     });
+    BULK.stats.map=(BULK.stats.map||0)+mapAdd;
     var added=addLearn(toLearn);
     BULK.stats.files++;BULK.stats.items+=props.length;BULK.stats.learned+=added;BULK.stats.queued+=queued;
     var s2=bulkState();s2.doneSigs=s2.doneSigs||{};s2.doneSigs[sig]=1;s2.stats=BULK.stats;saveBulkState(s2);saveBulkQ();
@@ -801,7 +832,7 @@ function bulkFinish(){
   var b=document.getElementById("bkBtns");
   if(b)b.innerHTML='<button class="fbtn" id="bkClose" style="flex:1">닫기</button>';
   var c=document.getElementById("bkClose");if(c)c.onclick=function(){var h=document.getElementById("modalHost");if(h)h.innerHTML="";};
-  showInfo("대량 학습 완료","파일 "+s.files+"개 · 인식 "+s.items+"건\n자동 학습 "+s.learned+"건(확실한 교정)\n검토 대기 "+s.queued+"건\n\n검토 대기는 '대량 학습 모드 → 검토 큐'에서 확인·학습하세요. 설정 → 인식 학습에서 ☁공유하면 전 직원 반영됩니다.");
+  showInfo("대량 학습 완료","파일 "+s.files+"개 · 인식 "+s.items+"건\n자동 학습 "+s.learned+"건(확실한 교정)\n거래처 정규화 사전 +"+(s.map||0)+"건 (누적 "+normapCount()+")\n검토 대기 "+s.queued+"건\n\n사전은 '거래처 표기 → 우리 표준'을 기억해, 다음에 같은 업체의 같은 표기를 자동 인식합니다. 많이 돌릴수록 커버리지가 늘어납니다.\n검토 대기는 '검토 큐'에서 확인·학습하세요.");
 }
 function openBulkMode(){
   var host=document.getElementById("modalHost");if(!host)return;
@@ -814,6 +845,7 @@ function openBulkMode(){
     +'<select id="bkModel" style="width:100%"><option value="claude-opus-4-8">기본 — 정확도 최고(비용 높음)</option><option value="claude-sonnet-5">절약 — 균형</option><option value="claude-haiku-4-5-20251001" selected>최대 절약 — 대량 권장(빠르고 저렴)</option></select>'
     +'<div class="flx" style="margin-top:10px"><label class="fbtn" style="flex:1;text-align:center">📁 폴더 선택<input type="file" id="bkDir" webkitdirectory directory multiple style="display:none"></label>'
     +'<button class="fbtn" id="bkQueue" style="flex:1">검토 큐 ('+BULKQ.length+')</button></div>'
+    +'<div class="flx" style="margin-top:6px"><button class="fbtn" id="bkDict" style="flex:1">📖 거래처 정규화 사전 ('+normapCount()+')</button></div>'
     +'<div id="bkPick" class="mut" style="font-size:12px;margin-top:8px"></div>'
     +'<div id="bkBody" style="margin-top:8px"></div>'
     +'<div class="flx" id="bkBtns" style="margin-top:10px"><button class="run" id="bkStart" style="flex:1" disabled>시작</button><button class="fbtn" id="bkPause" style="display:none">일시정지</button><button class="fbtn" id="bkReset">진행기록 초기화</button><button class="fbtn" id="bkClose2">닫기</button></div>'
@@ -821,6 +853,7 @@ function openBulkMode(){
   document.getElementById("bkClose2").onclick=function(){BULK.paused=true;BULK.running=false;host.innerHTML="";};
   document.getElementById("bkBd").onclick=function(e){if(e.target.id==="bkBd"){BULK.paused=true;BULK.running=false;host.innerHTML="";}};
   document.getElementById("bkQueue").onclick=openBulkQueue;
+  document.getElementById("bkDict").onclick=openNormapView;
   document.getElementById("bkReset").onclick=function(){if(window.confirm("완료 파일 기록·통계를 초기화합니다(학습된 예시는 유지). 계속?")){saveBulkState({});openBulkMode();}};
   document.getElementById("bkDir").onchange=function(e){
     var fl=Array.prototype.slice.call(e.target.files||[]);
@@ -860,15 +893,32 @@ function openBulkQueue(){
   document.getElementById("bqClose").onclick=function(){openBulkMode();};
   document.getElementById("bqBd").onclick=function(e){if(e.target.id==="bqBd")host.innerHTML="";};
   document.getElementById("bqSave").onclick=function(){
-    var picked=[],idxs=[];
-    Array.prototype.forEach.call(host.querySelectorAll(".bqChk"),function(c){if(!c.checked)return;var i=+c.getAttribute("data-i");var o=host.querySelector('.bqOut[data-i="'+i+'"]');var out=o?o.value.trim():"";if(out){picked.push({in:window.__bq[i].in,out:out});idxs.push(i);}});
+    var picked=[];
+    Array.prototype.forEach.call(host.querySelectorAll(".bqChk"),function(c){if(!c.checked)return;var i=+c.getAttribute("data-i");var o=host.querySelector('.bqOut[data-i="'+i+'"]');var out=o?o.value.trim():"";var q=window.__bq[i];if(out&&q){picked.push({in:q.in,out:out,vendor:q.vendor||""});}});
     var m=document.getElementById("bqMsg");if(!picked.length){if(m)m.textContent="선택된 항목이 없습니다.";return;}
     var added=addLearn(picked);
+    picked.forEach(function(p){if(p.vendor)learnNormap(p.vendor,p.in,p.out,"");}); // 사람이 승인한 매핑 → 거래처 사전에도
     // 처리한 항목은 큐에서 제거(원문 기준)
     var pin={};picked.forEach(function(p){pin[p.in]=1;});BULKQ=BULKQ.filter(function(q){return !pin[q.in];});saveBulkQ();
     if(m)m.textContent=added+"건 학습"+(added<picked.length?(" ("+(picked.length-added)+"건 중복 제외)"):"")+" · 큐에서 제거됨. 설정→인식 학습에서 ☁공유 가능.";
     setTimeout(openBulkQueue,700);
   };
+}
+function openNormapView(){
+  var host=document.getElementById("modalHost");if(!host)return;
+  var ks=Object.keys(NORMAP);
+  if(!ks.length){showInfo("거래처 정규화 사전","아직 비어 있습니다. 대량 학습이나 자동 교정 검토에서 '거래처 + 그 업체가 쓰는 표기'가 우리 표준으로 확정되면 여기에 쌓입니다.");return;}
+  // 거래처별로 묶어 보기(최근/대표 위주 300건)
+  var show=ks.slice(-300).reverse();
+  var rows=show.map(function(k){var v=NORMAP[k];return '<tr><td style="font-size:11.5px">🏢 '+esc(v.c||"")+'<br><span class="mut">“'+esc(v.t||"")+'”</span></td><td style="font-size:11.5px;color:var(--accent)">→ '+esc(v.out)+(v.code?' <span class="mut">('+esc(v.code)+')</span>':'')+'</td><td style="width:36px;text-align:right"><button class="fbtn npDel" data-k="'+esc(k)+'" style="padding:3px 6px">×</button></td></tr>';}).join("");
+  host.innerHTML='<div class="modal-bd" id="npBd"><div class="modal"><h2>거래처 정규화 사전 ('+ks.length+')</h2>'
+    +'<div class="hint" style="margin-top:0"><b>고객 표기 → 우리 표준품</b> 매핑입니다. 고객사가 자기네 부품번호·모델명으로 발주해도, 한 번 확정되면 다음부터 이 업체의 같은 표기를 자동으로 우리 표준/코드로 인식합니다. 많이 쌓일수록 커버리지가 늘어납니다. (최근 300건 표시)</div>'
+    +'<div style="max-height:56vh;overflow:auto;margin-top:8px"><table style="width:100%"><tbody>'+rows+'</tbody></table></div>'
+    +'<div class="hint" style="margin-top:8px">※ 현재 이 사전은 이 기기(브라우저)에 저장됩니다. 전 직원 공유가 필요하면 알려주세요 — 클라우드 동기화를 붙이겠습니다.</div>'
+    +'<div class="flx" style="margin-top:10px"><button class="fbtn" id="npClose" style="flex:1">닫기</button></div></div></div>';
+  document.getElementById("npClose").onclick=function(){openBulkMode();};
+  document.getElementById("npBd").onclick=function(e){if(e.target.id==="npBd")host.innerHTML="";};
+  Array.prototype.forEach.call(host.querySelectorAll(".npDel"),function(b){b.onclick=function(){delete NORMAP[b.getAttribute("data-k")];saveNormap();openNormapView();};});
 }
 function startDrawingUpload(files){
   if(!files.length)return;
@@ -1341,6 +1391,9 @@ function nearHistMatch(it,vendor){
 function corrProposal(r){
   var it=r.c.item,raw=(r.raw&&r.raw.rawText)||"",vendor=(r.raw&&r.raw.customer)||"";
   if(!raw)return null;
+  // 0) 거래처 정규화 사전 — 과거에 이 업체 표기를 우리 표준으로 정리한 기록이 있으면 최우선
+  var nmap=vendor?normapLookup(vendor,raw):null;
+  if(nmap&&nmap.out)return {in:raw,out:nmap.out,conf:"high",code:nmap.code||"",vendor:vendor,ev:"✓ 거래처 정규화 사전 일치(과거 이 업체 표기 → 우리 표준)"+(nmap.code?" · 코드 "+nmap.code:"")};
   var H=r.hist;
   // 1) 코드/치수+재질 정확 일치(가격 이력 보유) — 가장 신뢰
   if(H&&H.hasPrice){
@@ -1405,8 +1458,9 @@ function openLearnReview(){
     var picked=[];
     Array.prototype.forEach.call(host.querySelectorAll(".crChk"),function(c){
       if(!c.checked)return;var i=c.getAttribute("data-i");
-      var outEl=host.querySelector('.crOut[data-i="'+i+'"]');var out=outEl?outEl.value.trim():"";var inp=window.__corr[i].in;
+      var outEl=host.querySelector('.crOut[data-i="'+i+'"]');var out=outEl?outEl.value.trim():"";var cp=window.__corr[i],inp=cp.in;
       if(!out)return;picked.push({in:inp,out:out});
+      if(cp.vendor)learnNormap(cp.vendor,inp,out,cp.code||""); // 승인한 매핑 → 거래처 사전
     });
     var m=document.getElementById("crMsg");
     if(!picked.length){if(m)m.textContent="선택된 항목이 없습니다.";return;}
@@ -1587,7 +1641,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v27";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v28";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
