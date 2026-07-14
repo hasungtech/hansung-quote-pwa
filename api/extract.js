@@ -7,6 +7,8 @@ const AnthropicModule = require("@anthropic-ai/sdk");
 const Anthropic = AnthropicModule.default || AnthropicModule;
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-opus-4-8";
+// 대량 학습 시 비용 절감용으로 클라이언트가 모델을 지정할 수 있음(허용 목록만)
+const MODEL_ALLOW = { "claude-opus-4-8": 1, "claude-sonnet-5": 1, "claude-haiku-4-5-20251001": 1 };
 
 const SYSTEM =
   "당신은 한성테크(산업용 실링: 오일씰·오링·패킹·백업링·웨어링 등)의 견적 보조 OCR입니다. " +
@@ -91,9 +93,10 @@ module.exports = async function handler(req, res) {
     });
     content.push({ type: "text", text: "이 도면/문서에서 견적 품목을 추출해 형식에 맞게 출력하세요." });
 
+    const reqModel = (body.model && MODEL_ALLOW[body.model]) ? body.model : MODEL;
     const client = new Anthropic({ apiKey: apiKey });
     const msg = await client.messages.create({
-      model: MODEL,
+      model: reqModel,
       max_tokens: 4096,
       // 안정적인 시스템 프롬프트는 캐싱(짧으면 자동으로 캐시 미적용)
       system: [{ type: "text", text: SYSTEM + EXAMPLES, cache_control: { type: "ephemeral" } }],
