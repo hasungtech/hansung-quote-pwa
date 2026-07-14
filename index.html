@@ -382,7 +382,7 @@ function uploadBlob(pathname,data,ctype,adminKey,onProg){
   return fetchT("/api/pricedata",{},15000).then(function(r){return r.ok?r.json():{};}).catch(function(){return {};}).then(function(meta){
     if(meta&&meta.configured===false)throw new Error("클라우드 저장소(Vercel Blob)가 아직 연결되지 않았습니다. Vercel 프로젝트 → Storage에서 Blob 저장소를 연결(Connect)하고 Redeploy 하세요. 그 전에도 인식·견적은 기본 데이터로 정상 동작합니다.");
     return import("https://esm.sh/@vercel/blob@0.27/client").then(function(mod){
-      return mod.upload(pathname,new Blob([data],{type:ctype}),{access:"public",handleUploadUrl:"/api/pricedata",clientPayload:String(adminKey||""),onUploadProgress:function(p){if(onProg)onProg(p.percentage);}});
+      return mod.upload(pathname,new Blob([data],{type:ctype}),{access:"public",handleUploadUrl:"/api/pricedata",clientPayload:String(adminKey||""),multipart:false,onUploadProgress:function(p){if(onProg)onProg(p.percentage);}});
     }).then(function(b){return b.url;}).catch(function(e){
       var msg=(e&&e.message)||String(e);
       // 'client token' 류 오류는 원인이 애매 → 서버 상태로 정확히 판별해 안내
@@ -439,7 +439,7 @@ function rebuildFromFile(file,adminKey,st){
             // 25초 넘으면 백업은 건너뛰고 완료(멈춤 방지)
             return Promise.race([backup,delay(25000).then(function(){return false;})])["catch"](function(){return false;});
           })
-          .then(function(backupOk){return {keys:nkeys,rows:o.combined.length,note:o.note,backupOk:backupOk};});
+          .then(function(backupOk){return {keys:nkeys,rows:o.combined.length,note:o.note,backupOk:backupOk,out:o.out};});
       });
     });
   });
@@ -1683,8 +1683,10 @@ function renderCfg(){
     if(!key){if(st)st.textContent="관리자 비밀번호를 입력하세요.";return;}
     upBtn.disabled=true;lastPct=0;set("엑셀 읽는 중…");
     rebuildFromFile(f,key,set).then(function(r){
-      set("✅ 완료: "+(r.note||"")+" · 품목키 "+r.keys.toLocaleString()+"개."+(r.backupOk===false?" (원본 백업은 생략 — 가격데이터는 정상 저장됨)":"")+" 새 데이터를 불러옵니다…");
-      upBtn.disabled=false;loadPriceHistory();
+      set("✅ 완료: "+(r.note||"")+" · 품목키 "+r.keys.toLocaleString()+"개."+(r.backupOk===false?" (원본 백업은 생략 — 가격데이터는 정상 저장됨)":"")+" 반영 완료.");
+      upBtn.disabled=false;
+      if(r.out)applyPH(r.out,"cloud",Date.now()); // 방금 올린 데이터로 즉시 반영(목록 지연과 무관)
+      else loadPriceHistory();
     }).catch(function(e){set("❌ 실패: "+((e&&e.message)?e.message:String(e)));upBtn.disabled=false;});
   };
 }
@@ -1709,7 +1711,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v35";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v36";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
