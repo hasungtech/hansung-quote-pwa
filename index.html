@@ -222,7 +222,7 @@ function shareLearn(key,cb){
       LEARN=dedupLearn((Array.isArray(cloud)?cloud:[]).concat(LEARN)).slice(0,200);
       saveLearnLocal();
       if(cb)cb("클라우드 업로드 중…");
-      return uploadBlob("data/learn_examples.json",JSON.stringify(LEARN),"application/json",key,function(){});
+      return uploadData("data/learn_examples.json",JSON.stringify(LEARN),key,"application/json");
     });
 }
 // ===== 거래처별 정규화 사전 (고객 표기/부품번호 → 우리 표준품·코드) =====
@@ -397,12 +397,29 @@ function uploadBlob(pathname,data,ctype,adminKey,onProg){
     });
   });
 }
+// 바이트→base64 (큰 배열도 안전하게 청크 처리)
+function bytesToB64(u8){var s="",CH=0x8000;for(var i=0;i<u8.length;i+=CH)s+=String.fromCharCode.apply(null,u8.subarray(i,i+CH));return btoa(s);}
+// 서버 경유 저장: gzip 압축 후 /api/putdata 로 전송(브라우저 직접 업로드의 멈춤 문제 회피)
+function uploadData(pathname,data,adminKey,ctype,onProg){
+  if(onProg)onProg(10);
+  return loadPako().then(function(pako){
+    if(onProg)onProg(35);
+    var gz=pako.gzip(typeof data==="string"?data:JSON.stringify(data));
+    var b64=bytesToB64(gz);
+    if(b64.length>4200000)throw new Error("데이터가 커서 서버 저장 한도(4.5MB)를 넘습니다. 파일을 나눠 올리거나 관리자에게 문의하세요.");
+    if(onProg)onProg(55);
+    return fetchT("/api/putdata",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:String(adminKey||""),pathname:pathname,dataB64:b64,gz:true,contentType:ctype||"application/json"})},120000)
+      .then(function(r){return r.text().then(function(t){var j;try{j=JSON.parse(t);}catch(e){j={error:"서버 응답 오류(HTTP "+r.status+")"};}if(!r.ok||j.error)throw new Error(j.error||("HTTP "+r.status));if(onProg)onProg(100);return j.url;});});
+  });
+}
 // 클라우드에 보관된 원본 거래내역(누적) 불러오기
 function fetchRawRows(rawUrl){
   if(!rawUrl)return Promise.resolve([]);
   return fetch(rawUrl+(rawUrl.indexOf("?")>=0?"&":"?")+"v="+Date.now()).then(function(r){return r.ok?r.arrayBuffer():null;}).then(function(ab){
     if(!ab)return [];
-    return loadPako().then(function(pako){return JSON.parse(pako.ungzip(new Uint8Array(ab),{to:"string"}));});
+    // 신버전은 평문 JSON, 구버전은 gzip — 둘 다 지원
+    try{return JSON.parse(new TextDecoder("utf-8").decode(new Uint8Array(ab)));}catch(e){}
+    return loadPako().then(function(pako){try{return JSON.parse(pako.ungzip(new Uint8Array(ab),{to:"string"}));}catch(e2){return [];}});
   }).catch(function(){return [];});
 }
 function normRows(raw){var out=[];for(var i=1;i<raw.length;i++){var r=raw[i];if(!r)continue;var dt=excelDateB(r[3]);out.push([r[0]==null?"":r[0],r[1]==null?"":r[1],r[2]==null?"":r[2],dt?dt.ymd:(r[3]==null?"":String(r[3])),r[4]==null?"":r[4],r[5]==null?"":r[5],r[6]==null?"":r[6]]);}return out;}
@@ -429,14 +446,12 @@ function rebuildFromFile(file,adminKey,st){
         return new Promise(function(res){setTimeout(function(){res({out:buildPriceHistory(rows2),combined:newRows,note:note});},60);});
       }).then(function(o){
         var nkeys=Object.keys(o.out).length;st(o.note+" · 업로드 중(가격데이터)…");
-        return uploadBlob("data/price_history.json",JSON.stringify(o.out),"application/json",adminKey,function(p){st("가격데이터 업로드 "+Math.round(p)+"%");})
+        return uploadData("data/price_history.json",JSON.stringify(o.out),adminKey,"application/json",function(p){st("가격데이터 업로드 "+Math.round(p)+"%");})
           .then(function(){
             // 원본 백업(증분 감지용)은 부가 기능 — 실패/지연되어도 가격데이터 저장은 성공으로 처리
-            st("원본 압축·백업 업로드 중…(선택)");
-            var backup=loadPako()
-              .then(function(pako){return uploadBlob("data/raw_rows.json.gz",pako.gzip(JSON.stringify(o.combined)),"application/octet-stream",adminKey,function(p){st("원본 백업 업로드 "+Math.round(p)+"%");});})
+            st("원본 백업 저장 중…(선택)");
+            var backup=uploadData("data/raw_rows.json",JSON.stringify(o.combined),adminKey,"application/json",function(p){st("원본 백업 "+Math.round(p)+"%");})
               .then(function(){return true;})["catch"](function(){return false;});
-            // 25초 넘으면 백업은 건너뛰고 완료(멈춤 방지)
             return Promise.race([backup,delay(25000).then(function(){return false;})])["catch"](function(){return false;});
           })
           .then(function(backupOk){return {keys:nkeys,rows:o.combined.length,note:o.note,backupOk:backupOk,out:o.out};});
@@ -1711,7 +1726,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v36";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v37";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
