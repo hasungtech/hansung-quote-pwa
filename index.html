@@ -40,7 +40,7 @@
   @media (max-width:480px){input,select,textarea{font-size:16px}} /* iOS 포커스 시 자동 확대(줌) 방지 */
   textarea{resize:vertical;line-height:1.6}
   button{font-family:inherit;cursor:pointer}
-  .run{width:100%;padding:11px;background:var(--accent);color:#fff;border:none;border-radius:3px;font-size:14px;font-weight:700}
+  .run{width:100%;padding:11px;background:var(--accent);color:#fff;border:none;border-radius:3px;font-size:14px;font-weight:700;white-space:nowrap}
   .hint{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5}
   .res{border:1px solid var(--line);border-radius:3px;margin-bottom:14px}
   .res .in{background:var(--soft);padding:8px 12px;font-size:12px;border-bottom:1px solid var(--line)}
@@ -56,8 +56,9 @@
   .matrow{display:grid;grid-template-columns:70px 1fr 1fr;gap:8px;margin-bottom:8px;align-items:center}
   .install{position:fixed;left:16px;right:16px;bottom:16px;max-width:688px;margin:0 auto;background:var(--ink);color:#fff;border:none;border-radius:4px;padding:13px;font-size:14px;font-weight:700;display:none;z-index:50}
   .lo{color:var(--accent)} .hi{color:var(--green)} .mut{color:var(--muted)}
-  .flx{display:flex;gap:8px;margin-top:10px;align-items:center}
-  .fbtn{padding:11px 14px;border:1px solid var(--ink);border-radius:3px;font-size:13px;white-space:nowrap;cursor:pointer}
+  .flx{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap}
+  .fbtn{padding:11px 14px;border:1px solid var(--ink);border-radius:3px;font-size:13px;white-space:nowrap;cursor:pointer;background:#fff;text-align:center}
+  .fbtn:hover{background:var(--soft)}
   .mono{font-family:monospace;font-size:12px}
   .modal-bd{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:100}
   .modal{background:#fff;width:100%;max-width:720px;max-height:88vh;overflow:auto;border-radius:12px 12px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))}
@@ -1224,13 +1225,14 @@ function openHistory(){
 function renderRun(){
   CONV=[]; // 성사 팝업 레지스트리 초기화
   var inHtml='<div class="card"><h2>문의 입력 (자연어·여러 줄)</h2>'
-    +'<textarea id="ta" rows="5">'+esc(state.text)+'</textarea>'
-    +'<div class="flx"><button class="run" id="runBtn" style="flex:1">인식 &amp; 견적 실행</button>'
-    +'<label class="fbtn">도면·파일<input type="file" id="file" accept="image/*,application/pdf,.txt,.csv" multiple style="display:none"></label>'
-    +'<label class="fbtn">📁 폴더째<input type="file" id="fileDir" webkitdirectory directory multiple style="display:none"></label>'
-    +'<button class="fbtn" id="clearBtn">지우기</button></div>'
-    +'<div class="flx" style="margin-top:6px"><button class="fbtn" id="aiParseBtn" style="flex:1">🤖 AI 자유형식 인식 — 형식 안 맞아도 알아서 인식</button></div>'
-    +'<div class="flx" style="margin-top:6px"><button class="fbtn" id="bulkBtn" style="flex:1">📚 대량 학습 모드 — 과거 스캔 폴더 통째로 학습(이어하기·자동)</button></div>'
+    +'<textarea id="ta" rows="6">'+esc(state.text)+'</textarea>'
+    +'<button class="run" id="runBtn" style="margin-top:10px">인식 &amp; 견적 실행</button>'
+    +'<div class="flx" style="margin-top:8px">'
+    +'<label class="fbtn" style="flex:1 1 46%">📄 도면·파일<input type="file" id="file" accept="image/*,application/pdf,.txt,.csv" multiple style="display:none"></label>'
+    +'<label class="fbtn" style="flex:1 1 46%">📁 폴더째<input type="file" id="fileDir" webkitdirectory directory multiple style="display:none"></label>'
+    +'<button class="fbtn" id="clearBtn" style="flex:1 1 100%">지우기</button></div>'
+    +'<button class="fbtn" id="aiParseBtn" style="width:100%;margin-top:8px">🤖 AI 자유형식 인식</button>'
+    +'<button class="fbtn" id="bulkBtn" style="width:100%;margin-top:8px">📚 대량 학습 모드</button>'
     +'<div class="hint">한 줄에 한 품목. 인식: 타입(TC/SC…)·치수(오일씰 50x65x9·오링 6x3.5)·코드(P50/AS568-150/AN374)·재질·수량. <b>도면(사진·PDF)을 여러 장 한 번에 올리면 Claude 비전이 자동 인식</b>합니다.</div></div>';
   var mid="",actHtml="";
   if(state.drawingInfo&&state.drawingInfo.length){
@@ -1749,7 +1751,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v39";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v40";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
