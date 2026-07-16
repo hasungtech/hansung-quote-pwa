@@ -764,7 +764,7 @@ function buildTasks(files){
 }
 function renderTask(task){ // Promise<{payload}|{error}>
   if(task.kind==="error")return Promise.resolve({error:task.msg});
-  if(task.kind==="image")return new Promise(function(res){downscaleImage(task.file,1400,0.8,function(b){res(b?{payload:{type:"image",media_type:"image/jpeg",data:b}}:{error:"이미지 변환 실패(형식 미지원일 수 있음, JPG/PNG 권장)"});});});
+  if(task.kind==="image")return new Promise(function(res){downscaleImage(task.file,1400,0.8,function(b){res(b?{payload:{type:"image",media_type:"image/jpeg",data:b}}:{error:"이미지 변환 실패 — HEIC(아이폰 기본) 형식일 수 있습니다. 설정→카메라→포맷을 '높은 호환성(JPEG)'으로 바꾸거나 스크린샷/PDF로 올려주세요."});});});
   if(task.kind==="pdfpage")return task.doc.getPage(task.page).then(function(page){
     var vp=page.getViewport({scale:1}),scale=Math.min(2.5,1500/Math.max(vp.width,vp.height)),v=page.getViewport({scale:scale});
     var c=document.createElement("canvas");c.width=Math.round(v.width);c.height=Math.round(v.height);
@@ -1426,14 +1426,22 @@ function renderRun(){
   document.getElementById("ta").oninput=function(e){state.text=e.target.value;clearTimeout(window.__taSave);window.__taSave=setTimeout(persist,400);};
   document.getElementById("file").onchange=function(e){
     var fl=Array.prototype.slice.call(e.target.files||[]);if(!fl.length)return;
-    var draw=fl.filter(function(f){return /^image\//.test(f.type)||f.type==="application/pdf";});
+    // 모바일(특히 아이폰 HEIC)은 MIME이 비어오는 경우가 있어 확장자로도 이미지/PDF 판별
+    var isDraw=function(f){return /^image\//.test(f.type)||f.type==="application/pdf"||/\.(pdf|jpe?g|png|webp|heic|heif|gif|bmp|tiff?)$/i.test(f.name||"");};
+    var draw=fl.filter(isDraw);
     if(draw.length){
       var maxMB=Math.round(Math.max.apply(null,draw.map(function(f){return f.size||0;}))/1048576);
       var mobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent||"");
       if(maxMB>=25&&mobile&&!window.confirm("큰 파일("+maxMB+"MB)을 휴대폰에서 처리하면 멈출 수 있습니다.\nPC·크롬을 권장합니다. 그래도 계속할까요?")){e.target.value="";return;}
       startDrawingUpload(draw);e.target.value="";return;
     }
-    var f=fl[0];var rd=new FileReader();rd.onload=function(ev){state.text=String(ev.target.result).slice(0,4000);runPipeline();renderRun();if(missingResults().length>0)openFixModal();};rd.readAsText(f);};
+    var f=fl[0];
+    if(f&&(/^text\//.test(f.type)||/\.(txt|csv)$/i.test(f.name||""))){
+      var rd=new FileReader();rd.onload=function(ev){state.text=String(ev.target.result).slice(0,4000);runPipeline();renderRun();if(missingResults().length>0)openFixModal();};rd.readAsText(f);
+    }else{
+      showInfo("올릴 수 없는 파일","이미지(JPG·PNG·HEIC)·PDF·텍스트(.txt·.csv)만 인식합니다.\n\n선택한 파일: "+((f&&f.name)||(f&&f.type)||"알 수 없음")+"\n\n아이폰 사진이 안 되면: 설정 → 카메라 → 포맷 → '높은 호환성(JPEG)'으로 바꾸거나, 스크린샷·PDF로 올려보세요.");
+    }
+    e.target.value="";};
   var fd=document.getElementById("fileDir");
   if(fd)fd.onchange=function(e){
     var fl=Array.prototype.slice.call(e.target.files||[]);
@@ -1789,7 +1797,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v43";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v44";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
