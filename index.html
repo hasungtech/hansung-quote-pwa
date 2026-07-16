@@ -115,7 +115,19 @@ function parseLine(line){
     sizeSource:(id!=null&&od!=null)?"inline":sourceCode?"codeTable":"manual",
     confidence:"low",needsReview:true,rawText:raw};
 }
-function parseText(t){return t.split(/[\n;]+/).map(parseLine).filter(function(x){return x;});}
+// 문서 전체에 재질이 한 번만 명시된 경우(예: "O-Ring의 재질은 NBR") 재질 미상 품목에 일괄 적용
+function docMaterial(t){
+  var s=String(t||""),mi=s.search(/재질|MATERIAL|MAT\b/i);if(mi<0)return "";
+  var seg=s.slice(mi,mi+40).toUpperCase(),best="",bl=0;
+  for(var k in MAT){if(seg.indexOf(k.toUpperCase())>=0&&k.length>bl){best=MAT[k];bl=k.length;}}
+  return best;
+}
+function parseText(t){
+  var items=t.split(/[\n;]+/).map(parseLine).filter(function(x){return x;});
+  var dm=docMaterial(t);
+  if(dm)items.forEach(function(it){if(it&&!it.material){it.material=dm;it.matFromDoc=1;}});
+  return items;
+}
 // 자유형식 텍스트를 Claude로 인식 → 표준 줄로 정규화 후 기존 파이프라인에 투입
 // 결과 화면에서 인식이 틀리면 바로 교정해 학습 예시로 저장
 function learnFix(i){
@@ -1772,7 +1784,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v41";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v42";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
