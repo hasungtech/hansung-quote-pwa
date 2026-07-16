@@ -106,6 +106,11 @@ function parseLine(line){
   else if(codeM){var sc=codeM[1];sc=/^AS568/.test(sc)?sc:sc.replace(/-/g,"");sourceCode=sc;category=/^AS568|^[PGS]\d|^AN/.test(sc)?"O-RING":"기타";}
   else if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);category="OIL SEAL";}
   else if(dm2){var cs=parseFloat(dm2[2]);id=parseFloat(dm2[1]);od=id+2*cs;category="O-RING";}
+  // 코드가 있어도 같은 줄에 실제 치수가 있으면 반영(표준표에 없는 코드 대비: 예) S4 3.68x1.5, 주문제작)
+  if(codeM&&id==null){
+    if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);}
+    else if(dm2){var cs3=parseFloat(dm2[2]);id=parseFloat(dm2[1]);od=id+2*cs3;if(category==="기타")category="O-RING";}
+  }
   if(!tf&&!codeM&&!dm&&!dm2)return null;
   // 제품군 키워드 인식: 3-치수 품목이면 OIL SEAL 대신 구체 제품군으로 분류(설정 탭에서 공식 개별 편집)
   var hay=u+" "+raw;
@@ -1784,7 +1789,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v42";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v43";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
