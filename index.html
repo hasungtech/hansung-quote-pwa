@@ -97,11 +97,13 @@ function parseLine(line){
   var codeM=u.match(/\b(AS568-\d+|[PGS]-?\d+(?:\.\d+)?[A-Z]?|AN-?\d+|K-?\d+)\b/);
   var sourceCode="",category="기타",type="",id=null,od=null,hh=null;
   var tf=""; for(var i=0;i<TYPE_PREFIXES.length;i++){var p=TYPE_PREFIXES[i];if(new RegExp("\\b"+p+"\\b|\\b"+p+"(?=[\\dJN])").test(u)){tf=p;break;}}
-  var dm=u.match(/(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)/);
+  // 치수 파싱은 코드 토큰을 제거한 문자열에서 수행(예: 'S4 3.68x1.5'의 코드 '4'가 내경으로 새는 것 방지)
+  var udim=codeM?u.replace(codeM[0]," "):u;
+  var dm=udim.match(/(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)\s*[xX\s]\s*(\d+\.?\d*)/);
   // 하이픈/대시로 나눈 치수도 인식: "50-65-9" (코드 P-285 등과 혼동 방지: 앞에 영문이 없을 때만)
-  if(!dm){var dmh=u.match(/(?:^|[^A-Z\d-])(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)(?![\d-])/);if(dmh)dm=dmh;}
+  if(!dm){var dmh=udim.match(/(?:^|[^A-Z\d-])(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)(?![\d-])/);if(dmh)dm=dmh;}
   // 오링 2-숫자 표기(내경 x 굵기/단면). 3-숫자 치수가 없을 때만.
-  var dm2=dm?null:u.match(/(\d+\.?\d*)\s*[xX]\s*(\d+\.?\d*)/);
+  var dm2=dm?null:udim.match(/(\d+\.?\d*)\s*[xX]\s*(\d+\.?\d*)/);
   if(tf){category="OIL SEAL";type=tf;if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);}}
   else if(codeM){var sc=codeM[1];sc=/^AS568/.test(sc)?sc:sc.replace(/-/g,"");sourceCode=sc;category=/^AS568|^[PGS]\d|^AN/.test(sc)?"O-RING":"기타";}
   else if(dm){id=parseFloat(dm[1]);od=parseFloat(dm[2]);hh=parseFloat(dm[3]);category="OIL SEAL";}
@@ -1335,6 +1337,14 @@ function renderRun(){
       if(headline!=null){
         var ovv=ovGet(r.c.item.rawText),applied=(ovv!=null?ovv:headline);
         html+='<div class="price"><span style="font-size:12px;color:var(--muted)">추천가(개당) · '+hsrc+(hp?(' '+esc(H.date)):'')+'</span><b>'+won(headline)+'원</b></div>';
+        // 코드로만 매칭됐는데 그 코드가 여러 규격에 쓰여 편차가 크면(예: S4 10~1000원) 추천가를 신뢰하지 말라고 강하게 안내
+        var codeKey=hp&&String(H.key||"").indexOf("C:")===0;
+        var spread=(H&&H.min>0)?(H.max/H.min):1;
+        if(codeKey&&(H.vol||spread>=5)){
+          html+='<div style="margin-top:6px;padding:8px 10px;background:#fdf3f3;border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-size:12px;line-height:1.5">'
+            +'⚠ <b>코드('+esc(r.c.item.sourceCode||"")+')로만 매칭</b>됐습니다. 이 코드가 여러 규격에 쓰여 실판매 단가가 '+won(H.min)+'~'+won(H.max)+'원으로 크게 다릅니다. '
+            +'<b>추천가는 최근 1건일 뿐 이 주문의 정확한 단가가 아닐 수 있습니다.</b> 치수를 확인하고 아래 ✎적용 단가를 직접 입력하세요.</div>';
+        }
         html+='<div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
           +'<label style="margin:0;white-space:nowrap;font-size:12px;color:var(--ink);font-weight:700">✎ 적용 단가</label>'
           +'<input type="number" class="ovprice" data-i="'+ri+'" value="'+applied+'" style="max-width:120px;font-weight:700;'+(ovv!=null?'border-color:var(--accent);color:var(--accent)':'')+'">'
@@ -1797,7 +1807,7 @@ loadPriceHistory();
 if("serviceWorker" in navigator){
   try{
     // network-first: 온라인이면 항상 최신본을 받아 캐시 갱신, 오프라인일 때만 캐시 사용(설치된 PWA가 업데이트를 받도록)
-    var swCode='var C="hansung-quote-v44";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
+    var swCode='var C="hansung-quote-v45";self.addEventListener("install",function(e){self.skipWaiting();});self.addEventListener("activate",function(e){e.waitUntil(Promise.all([clients.claim(),caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===C?null:caches.delete(k);}));})]));});self.addEventListener("fetch",function(e){if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).then(function(res){if(res&&res.ok){var cl=res.clone();caches.open(C).then(function(c){c.put(e.request,cl);});}return res;}).catch(function(){return caches.match(e.request);}));});';
     var blob=new Blob([swCode],{type:"text/javascript"});
     navigator.serviceWorker.register(URL.createObjectURL(blob))["catch"](function(){});
   }catch(e){}
